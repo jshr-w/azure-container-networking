@@ -42,6 +42,7 @@ stages:
               vmSize: ${{ parameters.vmSize }}
               windowsVMSize: ${{ parameters.windowsVMSize }}
               region: $(LOCATION)
+              osSKU: ${{ parameters.osSKU }}
 
   - stage: ${{ parameters.name }}
     variables:
