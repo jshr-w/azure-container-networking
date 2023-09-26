@@ -175,7 +175,7 @@ stages:
       clusterType: overlay-byocni-up
       clusterName: mariner-cniv2-overlay
       nodeCount: ${LINUX_NODE_COUNT}
-      vmSize: Standard_DS4_v2
+      vmSize:  ${LINUX_VM_SKU}
       arch: amd64
       osSKU: AzureLinux
 
