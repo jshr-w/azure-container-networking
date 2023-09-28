@@ -23,6 +23,8 @@ const (
 	retryAttempts = 10
 	retryDelay    = 5 * time.Second
 	promAddress   = "http://localhost:9965/metrics"
+	labelSelector = "k8s-app=cilium"
+	namespace     = "kube-system"
 )
 
 var (
@@ -45,13 +47,13 @@ func TestEndpoints(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	clusterCtx, cancel := context.WithTimeout(ctx, 100000*time.Second)
+	clusterCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 	pingCheckFn := func() error {
 		var pf *k8s.PortForwarder
 		pf, err = k8s.NewPortForwarder(config, t, k8s.PortForwardingOpts{
-			Namespace:     "kube-system",
-			LabelSelector: "k8s-app=cilium",
+			Namespace:     namespace,
+			LabelSelector: labelSelector,
 			LocalPort:     9965,
 			DestPort:      9965,
 		})
@@ -60,11 +62,11 @@ func TestEndpoints(t *testing.T) {
 		}
 		pctx := context.Background()
 
-		portForwardCtx, cancel := context.WithTimeout(pctx, 100000*time.Second)
+		portForwardCtx, cancel := context.WithTimeout(pctx, (retryAttempts+1)*retryDelay)
 		defer cancel()
 
 		portForwardFn := func() error {
-			t.Log("attempting port forward")
+			t.Logf("attempting port forward to a pod with label %s, in namespace %s...", labelSelector, namespace)
 			if err := pf.Forward(portForwardCtx); err != nil {
 				return fmt.Errorf("could not start port forward: %w", err)
 			}
@@ -72,7 +74,7 @@ func TestEndpoints(t *testing.T) {
 		}
 
 		if err := defaultRetrier.Do(portForwardCtx, portForwardFn); err != nil {
-			t.Fatalf("could not start port forward within %d: %v", 100000*time.Second, err)
+			t.Fatalf("could not start port forward within %d: %v", (retryAttempts+1)*retryDelay, err)
 		}
 		defer pf.Stop()
 
@@ -88,6 +90,7 @@ func TestEndpoints(t *testing.T) {
 				return fmt.Errorf("scraping %s, did not find metric %s", val, promAddress)
 			}
 		}
+		t.Logf("all metrics validated: %+v", requiredMetrics)
 		return nil
 	}
 
