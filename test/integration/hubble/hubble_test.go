@@ -81,13 +81,13 @@ func TestEndpoints(t *testing.T) {
 		// scrape the hubble metrics
 		metrics, err := getPrometheusMetrics(promAddress)
 		if err != nil {
-			return err
+			return fmt.Errorf("scraping %s, failed with error: %w", promAddress, err)
 		}
 
 		// verify that the response contains the required metrics
 		for _, reqMetric := range requiredMetrics {
 			if val, exists := metrics[reqMetric]; !exists {
-				return fmt.Errorf("scraping %s, did not find metric %s", val, promAddress)
+				return fmt.Errorf("scraping %s, did not find metric %s", val, promAddress) //nolint:goerr113,gocritic
 			}
 		}
 		t.Logf("all metrics validated: %+v", requiredMetrics)
@@ -97,23 +97,23 @@ func TestEndpoints(t *testing.T) {
 	if err := defaultRetrier.Do(clusterCtx, pingCheckFn); err != nil {
 		t.Fatalf("metrics check failed with error: %v", err)
 	}
-
 }
 
 func getPrometheusMetrics(url string) (map[string]struct{}, error) {
-	resp, err := http.Get(url)
+	client := http.Client{}
+	resp, err := client.Get(url) //nolint
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("HTTP request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP request failed with status: %v", resp.Status)
+		return nil, fmt.Errorf("HTTP request failed with status: %v", resp.Status) //nolint:goerr113,gocritic
 	}
 
 	metricsData, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("reading HTTP response body failed: %w", err)
 	}
 
 	metrics := parseMetrics(string(metricsData))
@@ -156,7 +156,7 @@ func getClientConfig(kubeconfigPath string) (*rest.Config, error) {
 		// If running outside a Kubernetes cluster, use the kubeconfig file.
 		config, err = clientcmd.BuildConfigFromFlags("", kubeconfigPath)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("error creating Kubernetes client config: %w", err)
 		}
 	}
 	return config, nil
