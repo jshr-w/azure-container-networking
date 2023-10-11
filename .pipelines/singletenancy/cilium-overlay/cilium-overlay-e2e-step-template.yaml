@@ -220,11 +220,11 @@ steps:
     displayName: "Run Wireserver and Metadata Connectivity Tests"
 
   - script: |
-            echo "verify Hubble metrics endpoint is usable"
-            go test ./test/integration/hubble/ -count=1 -v
-          retryCountOnTaskFailure: 3
-          name: "HubbleConnectivityTests"
-          displayName: "Run Hubble Connectivity Tests"
+      echo "verify Hubble metrics endpoint is usable"
+      go test ./test/integration/hubble/ -count=1 -v
+    retryCountOnTaskFailure: 3
+    name: "HubbleConnectivityTests"
+    displayName: "Run Hubble Connectivity Tests"
 
   - script: |
       ARTIFACT_DIR=$(Build.ArtifactStagingDirectory)/test-output/
