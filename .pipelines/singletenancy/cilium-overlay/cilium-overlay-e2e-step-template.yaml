@@ -226,7 +226,7 @@ steps:
       kubectl rollout restart ds cilium
       kubectl get configmaps -A
       echo "verify Hubble metrics endpoint is usable"
-      go test ./test/integration/hubble/ -count=1 -v
+      go test ./test/hubble/ -count=1 -v
     retryCountOnTaskFailure: 3
     name: "HubbleConnectivityTests"
     displayName: "Run Hubble Connectivity Tests"
