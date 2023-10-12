@@ -220,6 +220,11 @@ steps:
     displayName: "Run Wireserver and Metadata Connectivity Tests"
 
   - script: |
+      echo "update Cilium configmap to enable Hubble" 
+      kubectl get configmaps -A
+      kubectl replace -f test/integration/manifests/cilium/cilium-config-hubble.yaml
+      kubectl rollout restart ds cilium
+      kubectl get configmaps -A
       echo "verify Hubble metrics endpoint is usable"
       go test ./test/integration/hubble/ -count=1 -v
     retryCountOnTaskFailure: 3
