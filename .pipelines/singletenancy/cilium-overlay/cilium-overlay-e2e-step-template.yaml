@@ -154,6 +154,20 @@ steps:
     displayName: "Run Cilium Connectivity Tests"
 
   - script: |
+      echo "update Cilium configmap to enable Hubble" 
+      kubectl get pods -A
+      kubectl get daemonset -A
+      kubectl get configmaps -A
+      kubectl replace -f test/integration/manifests/cilium/cilium-config-hubble.yaml
+      kubectl rollout restart ds cilium
+      kubectl get configmaps -A
+      echo "verify Hubble metrics endpoint is usable"
+      go test ./test/hubble/ -count=1 -v
+    retryCountOnTaskFailure: 3
+    name: "HubbleConnectivityTests"
+    displayName: "Run Hubble Connectivity Tests"
+
+  - script: |
       echo "validate pod IP assignment and check systemd-networkd restart"
       kubectl get pod -owide -A
       # Deleting echo-external-node deployment until cilium version matches TODO. https://github.com/cilium/cilium-cli/issues/67 is addressing the change.
@@ -218,18 +232,6 @@ steps:
     retryCountOnTaskFailure: 3
     name: "WireserverMetadataConnectivityTests"
     displayName: "Run Wireserver and Metadata Connectivity Tests"
-
-  - script: |
-      echo "update Cilium configmap to enable Hubble" 
-      kubectl get configmaps -A
-      kubectl replace -f test/integration/manifests/cilium/cilium-config-hubble.yaml
-      kubectl rollout restart ds cilium
-      kubectl get configmaps -A
-      echo "verify Hubble metrics endpoint is usable"
-      go test ./test/hubble/ -count=1 -v
-    retryCountOnTaskFailure: 3
-    name: "HubbleConnectivityTests"
-    displayName: "Run Hubble Connectivity Tests"
 
   - script: |
       ARTIFACT_DIR=$(Build.ArtifactStagingDirectory)/test-output/
