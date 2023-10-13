@@ -158,9 +158,11 @@ steps:
       kubectl get pods -A
       kubectl get daemonset -A
       kubectl get configmaps -A
-      kubectl replace -f test/integration/manifests/cilium/cilium-config-hubble.yaml
+      kubectl describe cm cilium-config -n kube-system
+      kubectl create configmap cilium-config -n kube-system --from-file=test/integration/manifests/cilium/cilium-config-hubble.yaml -o yaml --dry-run=client | kubectl replace -f -
       kubectl rollout restart ds cilium -n kube-system
       kubectl get configmaps -A
+      kubectl describe cm cilium-config -n kube-system
       echo "verify Hubble metrics endpoint is usable"
       go test ./test/hubble/ -count=1 -v
     retryCountOnTaskFailure: 3
