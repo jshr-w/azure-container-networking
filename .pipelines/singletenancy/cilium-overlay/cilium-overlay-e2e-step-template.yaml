@@ -154,13 +154,15 @@ steps:
     displayName: "Run Cilium Connectivity Tests"
 
   - script: |
-      echo "update Cilium configmap to enable Hubble" 
+      echo "update Cilium configmap to enable Hubble"
       kubectl get pods -A
       kubectl get daemonset -A
       kubectl get configmaps -A
       kubectl describe cm cilium-config -n kube-system
-      kubectl create configmap cilium-config -n kube-system --from-file=test/integration/manifests/cilium/cilium-config-hubble.yaml -o yaml --dry-run=client | kubectl replace -f -
+      kubectl create configmap cilium-config -n kube-system --from-file=test/integration/manifests/cilium/cilium-config-hubble.yaml -o yaml --dry-run=client | kubectl apply -f -
       kubectl get configmaps -A
+      sleep 20s
+      kubectl get pods -A
       kubectl describe cm cilium-config -n kube-system
       echo "verify Hubble metrics endpoint is usable"
       go test ./test/hubble/ -count=1 -v
