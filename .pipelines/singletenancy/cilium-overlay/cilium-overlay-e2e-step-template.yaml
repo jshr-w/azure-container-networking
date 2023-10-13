@@ -159,7 +159,7 @@ steps:
       kubectl get daemonset -A
       kubectl get configmaps -A
       kubectl replace -f test/integration/manifests/cilium/cilium-config-hubble.yaml
-      kubectl rollout restart ds cilium
+      kubectl rollout restart ds cilium -n kube-system
       kubectl get configmaps -A
       echo "verify Hubble metrics endpoint is usable"
       go test ./test/hubble/ -count=1 -v
