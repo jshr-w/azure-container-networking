@@ -165,16 +165,17 @@ steps:
       kubectl describe cm cilium-config -n kube-system
       sleep 5s
       kubectl get pods -Aowide
-      echo "wait 3 minutes for pods to be ready after restart"
-      sleep 60s
-      kubectl get pods -Aowide
-      sleep 60s
-      kubectl get pods -Aowide
-      sleep 60s
-      kubectl get pods -Aowide
+      echo "wait 10 minutes for pods to be ready after restart"
+      for i in {0..9}
+      do
+        echo "minute $i"
+        sleep 60s
+        kubectl get pods -Aowide
+      done
+      kubectl describe pods -n kube-system
       echo "verify Hubble metrics endpoint is usable"
       go test ./test/hubble/ -count=1 -v
-    retryCountOnTaskFailure: 3
+    retryCountOnTaskFailure: 1
     name: "HubbleConnectivityTests"
     displayName: "Run Hubble Connectivity Tests"
 
