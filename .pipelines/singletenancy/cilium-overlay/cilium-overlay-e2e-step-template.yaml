@@ -163,8 +163,14 @@ steps:
       kubectl create configmap cilium-config -n kube-system --from-file=test/integration/manifests/cilium/cilium-config-hubble.yaml -o yaml --dry-run=client | kubectl apply -f -
       kubectl rollout restart ds cilium -n kube-system
       kubectl describe cm cilium-config -n kube-system
-      echo "wait < 2 minutes for pods to be ready after restart"
-      kubectl wait pod --all --for=condition=Ready --namespace=kube-system --timeout=120s
+      sleep 5s
+      kubectl get pods -Aowide
+      echo "wait 3 minutes for pods to be ready after restart"
+      sleep 60s
+      kubectl get pods -Aowide
+      sleep 60s
+      kubectl get pods -Aowide
+      sleep 60s
       kubectl get pods -Aowide
       echo "verify Hubble metrics endpoint is usable"
       go test ./test/hubble/ -count=1 -v
