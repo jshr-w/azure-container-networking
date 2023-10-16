@@ -154,35 +154,21 @@ steps:
     displayName: "Run Cilium Connectivity Tests"
 
   - script: |
-      echo "Run HubbleConnectivityTests"
-      echo "DEBUG / get pods"
-      kubectl get pods -A
-      echo "DEBUG / get daemonset"
-      kubectl get daemonset -A
-      echo "DEBUG / get configmaps"
-      kubectl get configmaps -A
-      echo "DEBUG / get cilium-config"
-      kubectl get configmap cilium-config -n kube-system --output yaml
+      echo "Run Hubble Connectivity Tests"
       echo "update Cilium configmap to enable Hubble"
-      # kubectl create configmap cilium-config -n kube-system --from-file=test/integration/manifests/cilium/cilium-config-hubble.yaml -o yaml --dry-run=client | kubectl apply -f -
       kubectl apply -f test/integration/manifests/cilium/cilium-config-hubble.yaml
       kubectl rollout restart ds cilium -n kube-system
-      echo "DEBUG / get cilium-config"
-      kubectl get configmap cilium-config -n kube-system --output yaml
       sleep 5s
-      kubectl get pods -Aowide
-      echo "wait 10 minutes for pods to be ready after restart"
-      for i in {0..9}
+      echo "wait 3 minutes for pods to be ready after restart"
+      for i in {0..2}
       do
         echo "minute $i"
         sleep 60s
-        kubectl get pods -Aowide
       done
-      echo "DEBUG / pod logs"
-      kubectl describe pods -n kube-system
+      kubectl get pods -Aowide
       echo "verify Hubble metrics endpoint is usable"
       go test ./test/hubble/ -count=1 -v
-    retryCountOnTaskFailure: 1
+    retryCountOnTaskFailure: 3
     name: "HubbleConnectivityTests"
     displayName: "Run Hubble Connectivity Tests"
 
