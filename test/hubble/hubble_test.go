@@ -2,20 +2,17 @@ package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	k8s "github.com/Azure/azure-container-networking/test/integration"
+	"github.com/Azure/azure-container-networking/test/internal/kubernetes"
 	"github.com/Azure/azure-container-networking/test/internal/retry"
-	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/util/homedir"
 )
 
@@ -36,15 +33,7 @@ var (
 )
 
 func TestEndpoints(t *testing.T) {
-	var kubeconfigPath string
-	flag.StringVar(&kubeconfigPath, "kubeconfig", getDefaultKubeconfigPath(), "Path to the kubeconfig file")
-	flag.Parse()
-
-	config, err := getClientConfig(kubeconfigPath)
-	if err != nil {
-		fmt.Printf("Error creating Kubernetes client config: %v\n", err)
-		os.Exit(1)
-	}
+	config := kubernetes.MustGetRestConfig()
 
 	ctx := context.Background()
 	clusterCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
@@ -148,16 +137,4 @@ func parseMetrics(metricsData string) map[string]struct{} {
 func getDefaultKubeconfigPath() string {
 	home := homedir.HomeDir()
 	return filepath.Join(home, ".kube", "config")
-}
-
-func getClientConfig(kubeconfigPath string) (*rest.Config, error) {
-	config, err := rest.InClusterConfig()
-	if err != nil {
-		// If running outside a Kubernetes cluster, use the kubeconfig file.
-		config, err = clientcmd.BuildConfigFromFlags("", kubeconfigPath)
-		if err != nil {
-			return nil, fmt.Errorf("error creating Kubernetes client config: %w", err)
-		}
-	}
-	return config, nil
 }
