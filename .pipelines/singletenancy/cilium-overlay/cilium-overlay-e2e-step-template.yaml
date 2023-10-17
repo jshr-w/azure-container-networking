@@ -158,13 +158,8 @@ steps:
       echo "update Cilium configmap to enable Hubble"
       kubectl apply -f test/integration/manifests/cilium/cilium-config-hubble.yaml
       kubectl rollout restart ds cilium -n kube-system
-      sleep 5s
       echo "wait 3 minutes for pods to be ready after restart"
-      for i in {0..2}
-      do
-        echo "minute $i"
-        sleep 60s
-      done
+      sleep 180s
       kubectl get pods -Aowide
       echo "verify Hubble metrics endpoint is usable"
       go test ./test/hubble/ -count=1 -v
