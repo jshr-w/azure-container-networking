@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -13,7 +12,6 @@ import (
 	k8s "github.com/Azure/azure-container-networking/test/integration"
 	"github.com/Azure/azure-container-networking/test/internal/kubernetes"
 	"github.com/Azure/azure-container-networking/test/internal/retry"
-	"k8s.io/client-go/util/homedir"
 )
 
 const (
@@ -34,13 +32,12 @@ var (
 
 func TestEndpoints(t *testing.T) {
 	config := kubernetes.MustGetRestConfig()
-
 	ctx := context.Background()
 	clusterCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 	pingCheckFn := func() error {
 		var pf *k8s.PortForwarder
-		pf, err = k8s.NewPortForwarder(config, t, k8s.PortForwardingOpts{
+		pf, err := k8s.NewPortForwarder(config, t, k8s.PortForwardingOpts{
 			Namespace:     namespace,
 			LabelSelector: labelSelector,
 			LocalPort:     9965,
@@ -56,13 +53,13 @@ func TestEndpoints(t *testing.T) {
 
 		portForwardFn := func() error {
 			t.Logf("attempting port forward to a pod with label %s, in namespace %s...", labelSelector, namespace)
-			if err := pf.Forward(portForwardCtx); err != nil {
+			if err = pf.Forward(portForwardCtx); err != nil {
 				return fmt.Errorf("could not start port forward: %w", err)
 			}
 			return nil
 		}
 
-		if err := defaultRetrier.Do(portForwardCtx, portForwardFn); err != nil {
+		if err = defaultRetrier.Do(portForwardCtx, portForwardFn); err != nil {
 			t.Fatalf("could not start port forward within %d: %v", (retryAttempts+1)*retryDelay, err)
 		}
 		defer pf.Stop()
@@ -132,9 +129,4 @@ func parseMetrics(metricsData string) map[string]struct{} {
 	}
 
 	return metrics
-}
-
-func getDefaultKubeconfigPath() string {
-	home := homedir.HomeDir()
-	return filepath.Join(home, ".kube", "config")
 }
