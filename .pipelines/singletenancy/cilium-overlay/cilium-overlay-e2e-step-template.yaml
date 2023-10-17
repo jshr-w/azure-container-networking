@@ -154,15 +154,19 @@ steps:
     displayName: "Run Cilium Connectivity Tests"
 
   - script: |
-      echo "Run Hubble Connectivity Tests"
-      echo "update Cilium configmap to enable Hubble"
-      kubectl apply -f test/integration/manifests/cilium/cilium-config-hubble.yaml
-      kubectl rollout restart ds cilium -n kube-system
-      echo "wait 3 minutes for pods to be ready after restart"
-      sleep 180s
-      kubectl get pods -Aowide
-      echo "verify Hubble metrics endpoint is usable"
-      go test ./test/hubble/ -count=1 -v
+      if [ "$CILIUM_VERSION_TAG" = "cilium-nightly-pipeline" ]; then
+        echo "Run Hubble Connectivity Tests"
+        echo "update Cilium configmap to enable Hubble"
+        kubectl apply -f test/integration/manifests/cilium/cilium-config-hubble.yaml
+        kubectl rollout restart ds cilium -n kube-system
+        echo "wait 3 minutes for pods to be ready after restart"
+        sleep 180s
+        kubectl get pods -Aowide
+        echo "verify Hubble metrics endpoint is usable"
+        go test ./test/hubble/ -count=1 -v
+      else
+        echo "skip Hubble Connectivity Tests for PR pipeline"
+      fi
     retryCountOnTaskFailure: 3
     name: "HubbleConnectivityTests"
     displayName: "Run Hubble Connectivity Tests"
