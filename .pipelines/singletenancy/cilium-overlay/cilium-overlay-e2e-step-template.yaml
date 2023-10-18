@@ -2,6 +2,7 @@ parameters:
   name: ""
   testDropgz: ""
   clusterName: ""
+  testHubble: false
 
 steps:
   - bash: |
@@ -42,7 +43,6 @@ steps:
         echo "deploy Cilium ConfigMap"
         kubectl apply -f cilium/configmap.yaml
         kubectl apply -f test/integration/manifests/cilium/cilium${FILE_PATH}-config.yaml
-        kubectl apply -f test/integration/manifests/cilium/hubble/hubble-peer-svc.yaml
         echo "install Cilium ${CILIUM_VERSION_TAG}"
         # Passes Cilium image to daemonset and deployment
         envsubst '${CILIUM_VERSION_TAG},${CILIUM_IMAGE_REGISTRY}' < test/integration/manifests/cilium/daemonset.yaml | kubectl apply -f -
@@ -53,6 +53,18 @@ steps:
         kubectl get po -owide -A
     name: "installCilium"
     displayName: "Install Cilium on AKS Overlay"
+
+  - ${{ if eq( parameters['testHubble'], true) }}:
+      - script: |
+          echo "enable Hubble metrics server"
+          kubectl apply -f test/integration/manifests/cilium/hubble/hubble-peer-svc.yaml
+          kubectl apply -f test/integration/manifests/cilium/cilium-config-hubble.yaml
+          kubectl rollout restart ds cilium -n kube-system
+          echo "wait <3 minutes for pods to be ready after restart"
+          kubectl rollout status ds cilium -n kube-system --timeout=3m
+          kubectl get pods -Aowide
+        name: "installHubble"
+        displayName: "Install Hubble on AKS Overlay"
 
   - script: |
       echo "install cilium CLI"
@@ -153,23 +165,13 @@ steps:
     name: "ciliumConnectivityTests"
     displayName: "Run Cilium Connectivity Tests"
 
-  - script: |
-      if [ "$CILIUM_VERSION_TAG" = "cilium-nightly-pipeline" ]; then
-        echo "Run Hubble Connectivity Tests"
-        echo "update Cilium configmap to enable Hubble"
-        kubectl apply -f test/integration/manifests/cilium/cilium-config-hubble.yaml
-        kubectl rollout restart ds cilium -n kube-system
-        echo "wait <3 minutes for pods to be ready after restart"
-        kubectl rollout status ds cilium -n kube-system --timeout=3m
-        kubectl get pods -Aowide
-        echo "verify Hubble metrics endpoint is usable"
-        go test ./test/hubble/ -count=1 -v
-      else
-        echo "skip Hubble Connectivity Tests for PR pipeline"
-      fi
-    retryCountOnTaskFailure: 3
-    name: "HubbleConnectivityTests"
-    displayName: "Run Hubble Connectivity Tests"
+  - ${{ if eq( parameters['testHubble'], true) }}:
+      - script: |
+          echo "verify Hubble metrics endpoint is usable"
+          go test ./test/hubble/ -count=1 -v
+        retryCountOnTaskFailure: 3
+        name: "HubbleConnectivityTests"
+        displayName: "Run Hubble Connectivity Tests"
 
   - script: |
       echo "validate pod IP assignment and check systemd-networkd restart"
