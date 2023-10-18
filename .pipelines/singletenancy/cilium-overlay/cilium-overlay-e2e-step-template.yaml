@@ -168,7 +168,7 @@ steps:
   - ${{ if eq( parameters['testHubble'], true) }}:
       - script: |
           echo "verify Hubble metrics endpoint is usable"
-          go test ./test/hubble/ -count=1 -v
+          go test ./test/hubble/ -count=1 -v -tags=networkobservability
         retryCountOnTaskFailure: 3
         name: "HubbleConnectivityTests"
         displayName: "Run Hubble Connectivity Tests"

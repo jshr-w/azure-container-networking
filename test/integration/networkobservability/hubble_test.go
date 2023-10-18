@@ -1,4 +1,6 @@
-package main
+//go:build networkobservability
+
+package networkobservability
 
 import (
 	"context"
