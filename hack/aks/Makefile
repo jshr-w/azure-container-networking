@@ -15,7 +15,7 @@ NODEUPGRADE     ?= NodeImage
 OS_SKU          ?= Ubuntu
 OS_SKU_WIN      ?= Windows2022
 REGION          ?= westus2
-VM_SIZE	        ?= Standard_D4s_v3
+VM_SIZE	        ?= Standard_B2s
 VM_SIZE_WIN     ?= Standard_B2s
 
 # overrideable variables
