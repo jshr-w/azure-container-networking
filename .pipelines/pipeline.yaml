@@ -358,7 +358,7 @@ stages:
       testDropgz: ""
       clusterType: swift-byocni-nokubeproxy-up
       clusterName: "ciliume2e"
-      vmSize: Standard_B2s_v2
+      vmSize: Standard_D2s_v3
       k8sVersion: ""
       dependsOn: "containerize"
 
@@ -369,7 +369,7 @@ stages:
       testDropgz: true
       clusterType: swift-byocni-nokubeproxy-up
       clusterName: "cilpodcnie2e"
-      vmSize: Standard_B2s_v2
+      vmSize: Standard_D2s_v3
       k8sVersion: ""
       dependsOn: "containerize"
 
@@ -381,7 +381,7 @@ stages:
       testDropgz: ""
       clusterType: overlay-byocni-nokubeproxy-up
       clusterName: "cilovere2e"
-      vmSize: Standard_B2s_v2
+      vmSize: Standard_D2s_v3
       k8sVersion: ""
       dependsOn: "containerize"
 
@@ -392,7 +392,7 @@ stages:
       testDropgz: true
       clusterType: overlay-byocni-nokubeproxy-up
       clusterName: "cilovercnie2e"
-      vmSize: Standard_B2s_v2
+      vmSize: Standard_D2s_v3
       k8sVersion: ""
       dependsOn: "containerize"
 
@@ -405,7 +405,7 @@ stages:
       testDropgz: ""
       clusterType: overlay-byocni-up
       clusterName: "azovere2e"
-      vmSize: Standard_B2s_v2
+      vmSize: Standard_D2s_v3
       k8sVersion: ""
       dependsOn: "containerize"
 
@@ -417,7 +417,7 @@ stages:
       testDropgz: true
       clusterType: overlay-byocni-up
       clusterName: "azovercnie2e"
-      vmSize: Standard_B2s_v2
+      vmSize: Standard_D2s_v3
       k8sVersion: ""
       dependsOn: "containerize"
 
@@ -429,7 +429,7 @@ stages:
       testDropgz: ""
       clusterType: swift-byocni-up
       clusterName: "swifte2e"
-      vmSize: Standard_B2s_v2
+      vmSize: Standard_D2s_v3
       k8sVersion: ""
       dependsOn: "containerize"
 
@@ -440,7 +440,7 @@ stages:
       testDropgz: true
       clusterType: swift-byocni-up
       clusterName: "swiftcnie2e"
-      vmSize: Standard_B2s_v2
+      vmSize: Standard_D2s_v3
       k8sVersion: ""
       dependsOn: "containerize"
 
@@ -453,7 +453,7 @@ stages:
       os: "linux"
       clusterType: linux-cniv1-up
       clusterName: "ubuntu22e2e"
-      vmSize: Standard_B2s_v2
+      vmSize: Standard_D2s_v3
       k8sVersion: 1.25
       scaleup: 100
       dependsOn: "containerize"
@@ -466,7 +466,7 @@ stages:
       os: windows
       clusterType: windows-cniv1-up
       clusterName: "win22e2e"
-      vmSize: Standard_B2s_v2
+      vmSize: Standard_D2s_v3
       os_version: "ltsc2022"
       scaleup: 50
       dependsOn: "containerize"
@@ -479,7 +479,7 @@ stages:
       os: linux
       clusterType: dualstack-overlay-byocni-up
       clusterName: "dsovere2e"
-      vmSize: Standard_B2s_v2
+      vmSize: Standard_D2s_v3
       dependsOn: "containerize"
       testDropgz: true
 
