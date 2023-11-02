@@ -51,6 +51,7 @@ const (
 	Basic                  = "Basic"
 	JobObject              = "JobObject"
 	COW                    = "COW" // Container on Windows
+	BackendNICNC           = "BackendNICNC"
 )
 
 // Orchestrator Types
@@ -77,6 +78,8 @@ const (
 	InfraNIC NICType = "InfraNIC"
 	// Delegated VM NICs are projected from VM to container network namespace
 	DelegatedVMNIC NICType = "DelegatedVMNIC"
+	// BackendNIC NICs are used for infiniband nics on a VM
+	BackendNIC NICType = "BackendNIC"
 )
 
 // ChannelMode :- CNS channel modes
@@ -106,6 +109,7 @@ type CreateNetworkContainerRequest struct {
 	AllowNCToHostCommunication bool
 	EndpointPolicies           []NetworkContainerRequestPolicies
 	NCStatus                   v1alpha.NCStatus
+	NetworkInterfaceInfo       NetworkInterfaceInfo //nolint // introducing new field for backendnic, to be used later by cni code
 }
 
 // CreateNetworkContainerRequest implements fmt.Stringer for logging
@@ -113,9 +117,10 @@ func (req *CreateNetworkContainerRequest) String() string {
 	return fmt.Sprintf("CreateNetworkContainerRequest"+
 		"{Version: %s, NetworkContainerType: %s, NetworkContainerid: %s, PrimaryInterfaceIdentifier: %s, "+
 		"LocalIPConfiguration: %+v, IPConfiguration: %+v, SecondaryIPConfigs: %+v, MultitenancyInfo: %+v, "+
-		"AllowHostToNCCommunication: %t, AllowNCToHostCommunication: %t, NCStatus: %s}",
+		"AllowHostToNCCommunication: %t, AllowNCToHostCommunication: %t, NCStatus: %s, NetworkInterfaceInfo: %+v}",
 		req.Version, req.NetworkContainerType, req.NetworkContainerid, req.PrimaryInterfaceIdentifier, req.LocalIPConfiguration,
-		req.IPConfiguration, req.SecondaryIPConfigs, req.MultiTenancyInfo, req.AllowHostToNCCommunication, req.AllowNCToHostCommunication, string(req.NCStatus))
+		req.IPConfiguration, req.SecondaryIPConfigs, req.MultiTenancyInfo, req.AllowHostToNCCommunication, req.AllowNCToHostCommunication,
+		string(req.NCStatus), req.NetworkInterfaceInfo)
 }
 
 // NetworkContainerRequestPolicies - specifies policies associated with create network request
@@ -182,6 +187,8 @@ type PodInfo interface {
 	Equals(PodInfo) bool
 	// String implements string for logging PodInfos
 	String() string
+	// SecondaryInterfacesExist returns true if there exist a secondary interface for this pod
+	SecondaryInterfacesExist() bool
 }
 
 type KubernetesPodInfo struct {
@@ -194,9 +201,10 @@ var _ PodInfo = (*podInfo)(nil)
 // podInfo implements PodInfo for multiple schemas of Key
 type podInfo struct {
 	KubernetesPodInfo
-	PodInfraContainerID string
-	PodInterfaceID      string
-	Version             podInfoScheme
+	PodInfraContainerID   string
+	PodInterfaceID        string
+	Version               podInfoScheme
+	SecondaryInterfaceSet bool
 }
 
 func (p podInfo) String() string {
@@ -250,6 +258,10 @@ func (p *podInfo) OrchestratorContext() (json.RawMessage, error) {
 	return jsonContext, nil
 }
 
+func (p *podInfo) SecondaryInterfacesExist() bool {
+	return p.SecondaryInterfaceSet
+}
+
 // NewPodInfo returns an implementation of PodInfo that returns the passed
 // configuration for their namesake functions.
 func NewPodInfo(infraContainerID, interfaceID, name, namespace string) PodInfo {
@@ -287,6 +299,7 @@ func NewPodInfoFromIPConfigsRequest(req IPConfigsRequest) (PodInfo, error) {
 	}
 	p.(*podInfo).PodInfraContainerID = req.InfraContainerID
 	p.(*podInfo).PodInterfaceID = req.PodInterfaceID
+	p.(*podInfo).SecondaryInterfaceSet = req.SecondaryInterfacesExist
 	return p, nil
 }
 
@@ -315,6 +328,11 @@ func KubePodsToPodInfoByIP(pods []corev1.Pod) (map[string]PodInfo, error) {
 type MultiTenancyInfo struct {
 	EncapType string
 	ID        int // This can be vlanid, vxlanid, gre-key etc. (depends on EnacapType).
+}
+
+type NetworkInterfaceInfo struct {
+	NICType    NICType
+	MACAddress string
 }
 
 // IPConfiguration contains details about ip config to provision in the VM.
@@ -409,13 +427,14 @@ type GetNetworkContainerResponse struct {
 	Response                   Response
 	AllowHostToNCCommunication bool
 	AllowNCToHostCommunication bool
+	NetworkInterfaceInfo       NetworkInterfaceInfo
 }
 
 type PodIpInfo struct {
 	PodIPConfig                     IPSubnet
 	NetworkContainerPrimaryIPConfig IPConfiguration
 	HostPrimaryIPInfo               HostIPInfo
-	// NICType defines whether NIC is InfraNIC or DelegatedVMNIC
+	// NICType defines whether NIC is InfraNIC or DelegatedVMNIC or BackendNIC
 	NICType       NICType
 	InterfaceName string
 	// MacAddress of interface
@@ -442,11 +461,12 @@ type IPConfigRequest struct {
 
 // Same as IPConfigRequest except that DesiredIPAddresses is passed in as a slice
 type IPConfigsRequest struct {
-	DesiredIPAddresses  []string        `json:"desiredIPAddresses"`
-	PodInterfaceID      string          `json:"podInterfaceID"`
-	InfraContainerID    string          `json:"infraContainerID"`
-	OrchestratorContext json.RawMessage `json:"orchestratorContext"`
-	Ifname              string          `json:"ifname"` // Used by delegated IPAM
+	DesiredIPAddresses       []string        `json:"desiredIPAddresses"`
+	PodInterfaceID           string          `json:"podInterfaceID"`
+	InfraContainerID         string          `json:"infraContainerID"`
+	OrchestratorContext      json.RawMessage `json:"orchestratorContext"`
+	Ifname                   string          `json:"ifname"`                   // Used by delegated IPAM
+	SecondaryInterfacesExist bool            `json:"secondaryInterfacesExist"` // will be set by SWIFT v2 validator func
 }
 
 // IPConfigResponse is used in CNS IPAM mode as a response to CNI ADD

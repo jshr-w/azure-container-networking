@@ -163,7 +163,7 @@ func (service *HTTPRestService) saveNetworkContainerGoalState(
 		fallthrough
 	case cns.JobObject:
 		fallthrough
-	case cns.COW:
+	case cns.COW, cns.BackendNICNC:
 		fallthrough
 	case cns.WebApps:
 		switch service.state.OrchestratorType {
@@ -177,7 +177,7 @@ func (service *HTTPRestService) saveNetworkContainerGoalState(
 			fallthrough
 		case cns.AzureFirstParty:
 			fallthrough
-		case cns.WebApps: // todo: Is WebApps an OrchastratorType or ContainerType?
+		case cns.WebApps, cns.BackendNICNC: // todo: Is WebApps an OrchastratorType or ContainerType?
 			podInfo, err := cns.UnmarshalPodInfo(req.OrchestratorContext)
 			if err != nil {
 				errBuf := fmt.Sprintf("Unmarshalling %s failed with error %v", req.NetworkContainerType, err)
@@ -501,6 +501,7 @@ func (service *HTTPRestService) getAllNetworkContainerResponses(
 			LocalIPConfiguration:       savedReq.LocalIPConfiguration,
 			AllowHostToNCCommunication: savedReq.AllowHostToNCCommunication,
 			AllowNCToHostCommunication: savedReq.AllowNCToHostCommunication,
+			NetworkInterfaceInfo:       savedReq.NetworkInterfaceInfo,
 		}
 
 		// If the NC version check wasn't skipped, take into account the VFP programming status when returning the response
@@ -766,17 +767,13 @@ func (service *HTTPRestService) SendNCSnapShotPeriodically(ctx context.Context, 
 	}
 }
 
-func (service *HTTPRestService) validateIPConfigsRequest(
-	ipConfigsRequest cns.IPConfigsRequest,
-) (cns.PodInfo, types.ResponseCode, string) {
-	if service.state.OrchestratorType != cns.KubernetesCRD && service.state.OrchestratorType != cns.Kubernetes {
-		return nil, types.UnsupportedOrchestratorType, "ReleaseIPConfig API supported only for kubernetes orchestrator"
-	}
-
-	if ipConfigsRequest.OrchestratorContext == nil {
-		return nil,
-			types.EmptyOrchestratorContext,
-			fmt.Sprintf("OrchastratorContext is not set in the req: %+v", ipConfigsRequest)
+func (service *HTTPRestService) validateIPConfigsRequest(ctx context.Context, ipConfigsRequest cns.IPConfigsRequest) (cns.PodInfo, types.ResponseCode, string) {
+	// looping through all the ipconfigs request validators, if any validator fails, return the error
+	for _, validator := range service.ipConfigsRequestValidators {
+		respCode, message := validator(ctx, &ipConfigsRequest)
+		if respCode != types.Success {
+			return nil, respCode, message
+		}
 	}
 
 	// retrieve podinfo from orchestrator context
@@ -785,6 +782,18 @@ func (service *HTTPRestService) validateIPConfigsRequest(
 		return podInfo, types.UnsupportedOrchestratorContext, err.Error()
 	}
 	return podInfo, types.Success, ""
+}
+
+// validateDefaultIPConfigsRequest validates the request for default IP configs request
+func (service *HTTPRestService) validateDefaultIPConfigsRequest(_ context.Context, ipConfigsRequest *cns.IPConfigsRequest) (respCode types.ResponseCode, message string) {
+	if service.state.OrchestratorType != cns.KubernetesCRD && service.state.OrchestratorType != cns.Kubernetes {
+		return types.UnsupportedOrchestratorType, "ReleaseIPConfig API supported only for kubernetes orchestrator"
+	}
+
+	if ipConfigsRequest.OrchestratorContext == nil {
+		return types.EmptyOrchestratorContext, fmt.Sprintf("OrchastratorContext is not set in the req: %+v", ipConfigsRequest)
+	}
+	return types.Success, ""
 }
 
 // getPrimaryHostInterface returns the cached InterfaceInfo, if available, otherwise
@@ -828,6 +837,7 @@ func (service *HTTPRestService) populateIPConfigInfoUntransacted(ipConfigStatus 
 	podIPInfo.HostPrimaryIPInfo.PrimaryIP = primaryHostInterface.PrimaryIP
 	podIPInfo.HostPrimaryIPInfo.Subnet = primaryHostInterface.Subnet
 	podIPInfo.HostPrimaryIPInfo.Gateway = primaryHostInterface.Gateway
+	podIPInfo.NICType = cns.InfraNIC
 
 	return nil
 }
