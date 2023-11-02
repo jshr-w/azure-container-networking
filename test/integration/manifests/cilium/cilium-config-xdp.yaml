@@ -6,7 +6,7 @@ data:
   bpf-lb-acceleration: native
   bpf-lb-external-clusterip: "false"
   bpf-lb-map-max: "65536"
-  bpf-lb-mode: hybrid
+  bpf-lb-mode: snat
   bpf-map-dynamic-size-ratio: "0.0025"
   bpf-policy-map-max: "16384"
   bpf-root: /sys/fs/bpf
