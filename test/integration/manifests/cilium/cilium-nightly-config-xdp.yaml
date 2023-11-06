@@ -15,7 +15,6 @@ data:
   cluster-id: "0"
   cluster-name: default
   debug: "false"
-  devices: eth0
   disable-cnp-status-updates: "true"
   disable-endpoint-crd: "false"
   enable-auto-protect-node-port-range: "true"
