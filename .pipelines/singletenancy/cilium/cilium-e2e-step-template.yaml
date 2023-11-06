@@ -3,12 +3,6 @@ parameters:
   testDropgz: ""
   clusterName: ""
 
-variables:
-- name: FILE_PATH
-  value: "-nightly"
-- name: CILIUM_VERSION_TAG_FORCE
-  value: "1.14.3"
-
 steps:
   - bash: |
       echo $UID
@@ -46,12 +40,12 @@ steps:
         kubectl cluster-info
         kubectl get po -owide -A
         echo "deploy Cilium ConfigMap"
-        kubectl apply -f test/integration/manifests/cilium/cilium${FILE_PATH}-config-xdp.yaml
+        kubectl apply -f test/integration/manifests/cilium/cilium-nightly-config-xdp.yaml
         echo "install Cilium ${CILIUM_VERSION_TAG}"
-        envsubst '${CILIUM_VERSION_TAG_FORCE},${CILIUM_IMAGE_REGISTRY}' < test/integration/manifests/cilium/daemonset.yaml | kubectl apply -f -
-        envsubst '${CILIUM_VERSION_TAG_FORCE},${CILIUM_IMAGE_REGISTRY}' < test/integration/manifests/cilium/deployment.yaml | kubectl apply -f -
-        kubectl apply -f test/integration/manifests/cilium/cilium${FILE_PATH}-agent
-        kubectl apply -f test/integration/manifests/cilium/cilium${FILE_PATH}-operator
+        envsubst '1.14.3,${CILIUM_IMAGE_REGISTRY}' < test/integration/manifests/cilium/daemonset.yaml | kubectl apply -f -
+        envsubst '1.14.3,${CILIUM_IMAGE_REGISTRY}' < test/integration/manifests/cilium/deployment.yaml | kubectl apply -f -
+        kubectl apply -f test/integration/manifests/cilium/cilium-nightly-agent
+        kubectl apply -f test/integration/manifests/cilium/cilium-nightly-operator
         kubectl get po -owide -A
     name: "installCilium"
     displayName: "Install Cilium"
