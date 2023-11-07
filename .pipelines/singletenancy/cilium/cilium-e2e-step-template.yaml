@@ -42,8 +42,8 @@ steps:
         echo "deploy Cilium ConfigMap"
         kubectl apply -f test/integration/manifests/cilium/cilium-nightly-config-xdp.yaml
         echo "install Cilium ${CILIUM_VERSION_TAG}"
-        envsubst '1.14.3,${CILIUM_IMAGE_REGISTRY}' < test/integration/manifests/cilium/daemonset.yaml | kubectl apply -f -
-        envsubst '1.14.3,${CILIUM_IMAGE_REGISTRY}' < test/integration/manifests/cilium/deployment.yaml | kubectl apply -f -
+        envsubst '${CILIUM_VERSION_TAG},${CILIUM_IMAGE_REGISTRY}' < test/integration/manifests/cilium/daemonset.yaml | kubectl apply -f -
+        envsubst '${CILIUM_VERSION_TAG},${CILIUM_IMAGE_REGISTRY}' < test/integration/manifests/cilium/deployment.yaml | kubectl apply -f -
         kubectl apply -f test/integration/manifests/cilium/cilium-nightly-agent
         kubectl apply -f test/integration/manifests/cilium/cilium-nightly-operator
         kubectl get po -owide -A

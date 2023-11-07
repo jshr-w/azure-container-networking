@@ -43,10 +43,10 @@ steps:
         if [ "$CILIUM_VERSION_TAG" = "cilium-nightly-pipeline" ]; then FILE_PATH=-nightly && echo "Running nightly"; fi
         echo "deploy Cilium ConfigMap"
         kubectl apply -f test/integration/manifests/cilium/cilium-nightly-config-xdp.yaml
-        echo "install Cilium 1.14.3"
+        echo "install Cilium ${CILIUM_VERSION_TAG}"
         # Passes Cilium image to daemonset and deployment
-        envsubst '1.14.3,${CILIUM_IMAGE_REGISTRY}' < test/integration/manifests/cilium/daemonset.yaml | kubectl apply -f -
-        envsubst '1.14.3,${CILIUM_IMAGE_REGISTRY}' < test/integration/manifests/cilium/deployment.yaml | kubectl apply -f -
+        envsubst '${CILIUM_VERSION_TAG},${CILIUM_IMAGE_REGISTRY}' < test/integration/manifests/cilium/daemonset.yaml | kubectl apply -f -
+        envsubst '${CILIUM_VERSION_TAG},${CILIUM_IMAGE_REGISTRY}' < test/integration/manifests/cilium/deployment.yaml | kubectl apply -f -
         # Use different file directories for nightly and current cilium version
         kubectl apply -f test/integration/manifests/cilium/cilium-nightly-agent
         kubectl apply -f test/integration/manifests/cilium/cilium-nightly-operator
