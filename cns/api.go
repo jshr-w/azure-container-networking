@@ -34,6 +34,7 @@ const (
 	NmAgentSupportedApisPath      = "/network/nmagentsupportedapis"
 	V1Prefix                      = "/v0.1"
 	V2Prefix                      = "/v0.2"
+	EndpointPath                  = "/network/endpoints/"
 )
 
 // HTTPService describes the min API interface that every service should have.
@@ -48,6 +49,16 @@ type HTTPService interface {
 	GetPendingReleaseIPConfigs() []IPConfigurationStatus
 	GetPodIPConfigState() map[string]IPConfigurationStatus
 	MarkIPAsPendingRelease(numberToMark int) (map[string]IPConfigurationStatus, error)
+	AttachIPConfigsHandlerMiddleware(IPConfigsHandlerMiddleware)
+	MarkNIPsPendingRelease(n int) (map[string]IPConfigurationStatus, error)
+}
+
+// IPConfigsHandlerFunc
+type IPConfigsHandlerFunc func(context.Context, IPConfigsRequest) (*IPConfigsResponse, error)
+
+// IPConfigsHandlerMiddleware
+type IPConfigsHandlerMiddleware interface {
+	IPConfigsRequestHandlerWrapper(defaultHandler IPConfigsHandlerFunc, failureHandler IPConfigsHandlerFunc) IPConfigsHandlerFunc
 }
 
 // This is used for KubernetesCRD orchestrator Type where NC has multiple ips.
@@ -271,13 +282,13 @@ type NodeConfiguration struct {
 	NodeSubnet Subnet
 }
 
+// IpamPoolMonitorStateSnapshot struct to expose state values for IPAMPoolMonitor struct
 type IPAMPoolMonitor interface {
 	Start(ctx context.Context) error
 	Update(nnc *v1alpha.NodeNetworkConfig) error
 	GetStateSnapshot() IpamPoolMonitorStateSnapshot
 }
 
-// IpamPoolMonitorStateSnapshot struct to expose state values for IPAMPoolMonitor struct
 type IpamPoolMonitorStateSnapshot struct {
 	MinimumFreeIps           int64
 	MaximumFreeIps           int64
@@ -346,4 +357,10 @@ type HomeAzResponse struct {
 type GetHomeAzResponse struct {
 	Response       Response       `json:"response"`
 	HomeAzResponse HomeAzResponse `json:"homeAzResponse"`
+}
+
+// Used by EndpointHandler API to update endpoint state.
+type EndpointRequest struct {
+	HnsEndpointID string `json:"hnsEndpointID"`
+	HostVethName  string `json:"hostVethName"`
 }

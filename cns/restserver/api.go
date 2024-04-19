@@ -783,17 +783,22 @@ func (service *HTTPRestService) getHomeAz(w http.ResponseWriter, r *http.Request
 }
 
 func (service *HTTPRestService) createOrUpdateNetworkContainer(w http.ResponseWriter, r *http.Request) {
-	logger.Printf("[Azure CNS] createOrUpdateNetworkContainer")
-
 	var req cns.CreateNetworkContainerRequest
-	err := service.Listener.Decode(w, r, &req)
-	logger.Request(service.Name, req.String(), err)
-	if err != nil {
+	if err := service.Listener.Decode(w, r, &req); err != nil {
+		logger.Errorf("[Azure CNS] could not decode request: %v", err)
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	if err := req.Validate(); err != nil {
+		logger.Errorf("[Azure CNS] invalid request %+v: %s", req, err)
+		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
+	logger.Request(service.Name, req.String(), nil)
 	var returnCode types.ResponseCode
 	var returnMessage string
+	var err error
 	switch r.Method {
 	case http.MethodPost:
 		if req.NetworkContainerType == cns.WebApps {
@@ -872,8 +877,8 @@ func (service *HTTPRestService) getNetworkContainerByID(w http.ResponseWriter, r
 }
 
 // the function is to get all network containers based on given OrchestratorContext
-func (service *HTTPRestService) getAllNetworkContainers(w http.ResponseWriter, r *http.Request) {
-	logger.Printf("[Azure CNS] getAllNetworkContainers")
+func (service *HTTPRestService) GetAllNetworkContainers(w http.ResponseWriter, r *http.Request) {
+	logger.Printf("[Azure CNS] GetAllNetworkContainers")
 
 	var req cns.GetNetworkContainerRequest
 
@@ -914,8 +919,8 @@ func (service *HTTPRestService) getAllNetworkContainers(w http.ResponseWriter, r
 	logger.Response(service.Name, resp, resp.Response.ReturnCode, err)
 }
 
-func (service *HTTPRestService) getNetworkContainerByOrchestratorContext(w http.ResponseWriter, r *http.Request) {
-	logger.Printf("[Azure CNS] getNetworkContainerByOrchestratorContext")
+func (service *HTTPRestService) GetNetworkContainerByOrchestratorContext(w http.ResponseWriter, r *http.Request) {
+	logger.Printf("[Azure CNS] GetNetworkContainerByOrchestratorContext")
 
 	var req cns.GetNetworkContainerRequest
 
@@ -1376,8 +1381,8 @@ func (service *HTTPRestService) unpublishNetworkContainer(w http.ResponseWriter,
 	logger.Response(service.Name, resp, resp.Response.ReturnCode, nil)
 }
 
-func (service *HTTPRestService) createHostNCApipaEndpoint(w http.ResponseWriter, r *http.Request) {
-	logger.Printf("[Azure-CNS] createHostNCApipaEndpoint")
+func (service *HTTPRestService) CreateHostNCApipaEndpoint(w http.ResponseWriter, r *http.Request) {
+	logger.Printf("[Azure-CNS] CreateHostNCApipaEndpoint")
 
 	var (
 		err           error
@@ -1435,8 +1440,8 @@ func (service *HTTPRestService) createHostNCApipaEndpoint(w http.ResponseWriter,
 	logger.Response(service.Name, response, response.Response.ReturnCode, err)
 }
 
-func (service *HTTPRestService) deleteHostNCApipaEndpoint(w http.ResponseWriter, r *http.Request) {
-	logger.Printf("[Azure-CNS] deleteHostNCApipaEndpoint")
+func (service *HTTPRestService) DeleteHostNCApipaEndpoint(w http.ResponseWriter, r *http.Request) {
+	logger.Printf("[Azure-CNS] DeleteHostNCApipaEndpoint")
 
 	var (
 		err           error

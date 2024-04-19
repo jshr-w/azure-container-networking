@@ -29,8 +29,10 @@ import (
 )
 
 const (
-	primaryIp           = "10.0.0.5"
-	gatewayIp           = "10.0.0.1"
+	primaryIP           = "10.0.0.5"
+	SWIFTv2IP           = "192.168.0.1"
+	SWIFTv2MAC          = "00:00:00:00:00:00"
+	gatewayIP           = "10.0.0.1"
 	subnetPrfixLength   = 24
 	dockerContainerType = cns.Docker
 	releasePercent      = 50
@@ -833,18 +835,6 @@ func createAndValidateNCRequest(t *testing.T, secondaryIPConfigs map[string]cns.
 	if returnCode != 0 {
 		t.Fatalf("Failed to createNetworkContainerRequest, req: %+v, err: %d", req, returnCode)
 	}
-	_ = svc.IPAMPoolMonitor.Update(&v1alpha.NodeNetworkConfig{
-		Status: v1alpha.NodeNetworkConfigStatus{
-			Scaler: v1alpha.Scaler{
-				BatchSize:               batchSize,
-				ReleaseThresholdPercent: releasePercent,
-				RequestThresholdPercent: requestPercent,
-			},
-		},
-		Spec: v1alpha.NodeNetworkConfigSpec{
-			RequestedIPCount: initPoolSize,
-		},
-	})
 	validateNetworkRequest(t, *req)
 }
 
@@ -916,9 +906,9 @@ func validateNetworkRequest(t *testing.T, req cns.CreateNetworkContainerRequest)
 func generateNetworkContainerRequest(secondaryIps map[string]cns.SecondaryIPConfig, ncID, ncVersion string) *cns.CreateNetworkContainerRequest {
 	var ipConfig cns.IPConfiguration
 	ipConfig.DNSServers = dnsservers
-	ipConfig.GatewayIPAddress = gatewayIp
+	ipConfig.GatewayIPAddress = gatewayIP
 	var ipSubnet cns.IPSubnet
-	ipSubnet.IPAddress = primaryIp
+	ipSubnet.IPAddress = primaryIP
 	ipSubnet.PrefixLength = subnetPrfixLength
 	ipConfig.IPSubnet = ipSubnet
 
@@ -1059,18 +1049,6 @@ func createNCReqInternal(t *testing.T, secondaryIPConfigs map[string]cns.Seconda
 	if returnCode != 0 {
 		t.Fatalf("Failed to createNetworkContainerRequest, req: %+v, err: %d", req, returnCode)
 	}
-	_ = svc.IPAMPoolMonitor.Update(&v1alpha.NodeNetworkConfig{
-		Status: v1alpha.NodeNetworkConfigStatus{
-			Scaler: v1alpha.Scaler{
-				BatchSize:               batchSize,
-				ReleaseThresholdPercent: releasePercent,
-				RequestThresholdPercent: requestPercent,
-			},
-		},
-		Spec: v1alpha.NodeNetworkConfigSpec{
-			RequestedIPCount: initPoolSize,
-		},
-	})
 	return *req
 }
 

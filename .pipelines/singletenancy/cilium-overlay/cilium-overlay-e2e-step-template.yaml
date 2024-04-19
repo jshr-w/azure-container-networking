@@ -1,6 +1,5 @@
 parameters:
   name: ""
-  testDropgz: ""
   clusterName: ""
   testHubble: false
 
@@ -40,24 +39,44 @@ steps:
         pwd
         kubectl cluster-info
         kubectl get po -owide -A
-        if [ "$CILIUM_VERSION_TAG" = "cilium-nightly-pipeline" ]; then FILE_PATH=-nightly && echo "Running nightly"; fi
-        echo "deploy Cilium ConfigMap"
-        kubectl apply -f cilium/configmap.yaml
-        kubectl apply -f test/integration/manifests/cilium/cilium${FILE_PATH}-config.yaml
-        echo "install Cilium ${CILIUM_VERSION_TAG}"
-        # Passes Cilium image to daemonset and deployment
-        envsubst '${CILIUM_VERSION_TAG},${CILIUM_IMAGE_REGISTRY}' < test/integration/manifests/cilium/daemonset.yaml | kubectl apply -f -
-        envsubst '${CILIUM_VERSION_TAG},${CILIUM_IMAGE_REGISTRY}' < test/integration/manifests/cilium/deployment.yaml | kubectl apply -f -
-        # Use different file directories for nightly and current cilium version
-        kubectl apply -f test/integration/manifests/cilium/cilium${FILE_PATH}-agent
-        kubectl apply -f test/integration/manifests/cilium/cilium${FILE_PATH}-operator
+        if [ "$CILIUM_VERSION_TAG" = "cilium-nightly-pipeline" ]; then 
+          FILE_PATH=-nightly
+          echo "Running nightly"
+          echo "deploy Cilium ConfigMap"
+          kubectl apply -f test/integration/manifests/cilium/cilium${FILE_PATH}-config.yaml
+          # Passes Cilium image to daemonset and deployment
+          envsubst '${CILIUM_VERSION_TAG},${CILIUM_IMAGE_REGISTRY}' < test/integration/manifests/cilium/daemonset.yaml | kubectl apply -f -
+          envsubst '${CILIUM_VERSION_TAG},${CILIUM_IMAGE_REGISTRY}' < test/integration/manifests/cilium/deployment.yaml | kubectl apply -f -
+          # Use different file directories for nightly and current cilium version
+          kubectl apply -f test/integration/manifests/cilium/cilium${FILE_PATH}-agent
+          kubectl apply -f test/integration/manifests/cilium/cilium${FILE_PATH}-operator
+        else
+          echo "install Cilium ${CILIUM_VERSION_TAG}"
+          export DIR=${CILIUM_VERSION_TAG%.*}
+          echo "installing files from ${DIR}"
+          echo "deploy Cilium ConfigMap"
+          kubectl apply -f test/integration/manifests/cilium/v${DIR}/cilium-config/cilium-config.yaml
+          # Passes Cilium image to daemonset and deployment
+          kubectl apply -f test/integration/manifests/cilium/v${DIR}/cilium-agent/files
+          kubectl apply -f test/integration/manifests/cilium/v${DIR}/cilium-operator/files
+                    
+          envsubst '${CILIUM_VERSION_TAG},${CILIUM_IMAGE_REGISTRY}' < test/integration/manifests/cilium/v${DIR}/cilium-agent/templates/daemonset.yaml | kubectl apply -f -
+          envsubst '${CILIUM_VERSION_TAG},${CILIUM_IMAGE_REGISTRY}' < test/integration/manifests/cilium/v${DIR}/cilium-operator/templates/deployment.yaml | kubectl apply -f -
+        fi
+        
         kubectl get po -owide -A
     name: "installCilium"
     displayName: "Install Cilium on AKS Overlay"
 
   - script: |
       echo "install cilium CLI"
-      CILIUM_CLI_VERSION=$(curl -s https://raw.githubusercontent.com/cilium/cilium-cli/master/stable.txt)
+      if [[ ${CILIUM_VERSION_TAG} =~ ^1.1[1-3].[0-9]{1,2} ]]; then
+        echo "Cilium Agent Version ${BASH_REMATCH[0]}"
+        CILIUM_CLI_VERSION=$(curl -s https://raw.githubusercontent.com/cilium/cilium-cli/main/stable-v0.14.txt)
+      else
+        echo "Cilium Agent Version ${CILIUM_VERSION_TAG}"
+        CILIUM_CLI_VERSION=$(curl -s https://raw.githubusercontent.com/cilium/cilium-cli/master/stable.txt)
+      fi
       CLI_ARCH=amd64
       if [ "$(uname -m)" = "aarch64" ]; then CLI_ARCH=arm64; fi
       curl -L --fail --remote-name-all https://github.com/cilium/cilium-cli/releases/download/${CILIUM_CLI_VERSION}/cilium-linux-${CLI_ARCH}.tar.gz{,.sha256sum}
@@ -65,70 +84,26 @@ steps:
       sudo tar xzvfC cilium-linux-${CLI_ARCH}.tar.gz /usr/local/bin
       rm cilium-linux-${CLI_ARCH}.tar.gz{,.sha256sum}
       cilium status
+      cilium version
     name: "installCiliumCLI"
     displayName: "Install Cilium CLI"
 
   - script: |
-      echo "install kubetest2 and gsutils"
-      go get github.com/onsi/ginkgo/ginkgo
-      go get github.com/onsi/gomega/...
-      go install github.com/onsi/ginkgo/ginkgo@latest
-      go install sigs.k8s.io/kubetest2@latest
-      go install sigs.k8s.io/kubetest2/kubetest2-noop@latest
-      go install sigs.k8s.io/kubetest2/kubetest2-tester-ginkgo@latest
-      wget https://storage.googleapis.com/pub/gsutil.tar.gz
-      tar xfz gsutil.tar.gz
-      sudo mv gsutil /usr/local/bin
-    name: "installKubetest"
-    displayName: "Set up Conformance Tests"
-
-  - ${{ if eq( parameters['testDropgz'], true) }}:
-      - script: |
-          echo "##vso[task.setvariable variable=dropgzVersion]$(make cni-dropgz-test-version)"
-        name: dropgzTestVersion
-        displayName: "Dropgz Test Version"
-  - ${{ else }}:
-      - script: |
-          echo "##vso[task.setvariable variable=dropgzVersion]$(make cni-dropgz-version)"
-        name: dropgzVersion
-        displayName: "Dropgz Version"
-
-  - script: |
       echo "Start Azilium E2E Tests on Overlay Cluster"
-      # Nightly does not build images per commit. Will use existing image.
       if [ "$CILIUM_VERSION_TAG" = "cilium-nightly-pipeline" ]
       then
-          CNS=$(CNS_VERSION) DROPGZ=$(DROP_GZ_VERSION) && echo "Running nightly"
+          CNS=$(CNS_VERSION) IPAM=$(AZURE_IPAM_VERSION) && echo "Running nightly"
       else
-          CNS=$(make cns-version) DROPGZ=$(dropgzVersion)
+          CNS=$(make cns-version) IPAM=$(make azure-ipam-version)
       fi
-      sudo -E env "PATH=$PATH" make test-integration CNS_VERSION=${CNS} CNI_DROPGZ_VERSION=${DROPGZ} INSTALL_CNS=true INSTALL_OVERLAY=true TEST_DROPGZ=${{ parameters.testDropgz }}
+      kubectl get po -owide -A
+      sudo -E env "PATH=$PATH" make test-load SCALE_UP=32 OS_TYPE=linux VALIDATE_STATEFILE=true INSTALL_CNS=true INSTALL_OVERLAY=true AZURE_IPAM_VERSION=${IPAM} CNS_VERSION=${CNS} CLEANUP=true
     retryCountOnTaskFailure: 3
     name: "aziliumTest"
     displayName: "Run Azilium E2E on AKS Overlay"
 
   - script: |
-      echo "Status of the nodes and pods after the test"
-      kubectl get nodes -o wide
-      kubectl get pods -A -o wide
-      echo "Logs will be available as a build artifact"
-      ARTIFACT_DIR=$(Build.ArtifactStagingDirectory)/test-output/
-      echo $ARTIFACT_DIR
-      sudo rm -rf $ARTIFACT_DIR
-      sudo mkdir $ARTIFACT_DIR
-      sudo cp test/integration/logs/* $ARTIFACT_DIR
-    name: "GetLogs"
-    displayName: "Get logs"
-    condition: always()
-
-  - task: PublishBuildArtifacts@1
-    inputs:
-      artifactName: test-output
-      pathtoPublish: "$(Build.ArtifactStagingDirectory)/test-output"
-    condition: always()
-
-  - script: |
-      kubectl get pods -A
+      kubectl get po -owide -A
       echo "Waiting < 2 minutes for cilium to be ready"
       # Ensure Cilium is ready Xm\Xs
       cilium status --wait --wait-duration 2m
@@ -137,19 +112,9 @@ steps:
     displayName: "Cilium Status"
 
   - script: |
-      echo "Run Service Conformance E2E"
-      export PATH=${PATH}:/usr/local/bin/gsutil
-      KUBECONFIG=~/.kube/config kubetest2 noop \
-        --test ginkgo -- \
-        --focus-regex "Services.*\[Conformance\].*" \
-        --skip-regex "should serve endpoints on same port and different protocols" # Cilium does not support this feature. For more info on test: https://github.com/kubernetes/kubernetes/blame/e602e9e03cd744c23dde9fee09396812dd7bdd93/test/conformance/testdata/conformance.yaml#L1780-L1788
-    name: "servicesConformance"
-    displayName: "Run Services Conformance Tests"
-
-  - script: |
       echo "Run Cilium Connectivity Tests"
       cilium status
-      cilium connectivity test
+      cilium connectivity test --connect-timeout 4s --request-timeout 30s --test '!pod-to-pod-encryption,!node-to-node-encryption'
     retryCountOnTaskFailure: 3
     name: "ciliumConnectivityTests"
     displayName: "Run Cilium Connectivity Tests"
@@ -234,12 +199,3 @@ steps:
     retryCountOnTaskFailure: 3
     name: "WireserverMetadataConnectivityTests"
     displayName: "Run Wireserver and Metadata Connectivity Tests"
-
-  - script: |
-      ARTIFACT_DIR=$(Build.ArtifactStagingDirectory)/test-output/
-      echo $ARTIFACT_DIR
-      sudo rm -rf $ARTIFACT_DIR
-      sudo rm -rf test/integration/logs
-    name: "Cleanupartifactdir"
-    displayName: "Cleanup artifact dir"
-    condition: always()

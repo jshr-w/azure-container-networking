@@ -4,6 +4,7 @@ parameters:
   clusterType: ""
   clusterName: ""
   nodeCount: ""
+  nodeCountWin: ""
   vmSize: ""
   vmSizeWin: ""
   os: ""
@@ -12,6 +13,7 @@ parameters:
   iterations: 3
   os_version: ""
   osSKU: Ubuntu
+  osSkuWin: Windows2022
 
 # CNIv1
 # + Should be able to scale up/down the pods successfully certain number of times.
@@ -74,10 +76,13 @@ stages:
                 clusterType: ${{ parameters.clusterType }}
                 clusterName: ${{ parameters.clusterName }}-$(commitID)
                 nodeCount: ${{ parameters.nodeCount }}
+                nodeCountWin: ${{ parameters.nodeCountWin }}
                 vmSize: ${{ parameters.vmSize }}
                 vmSizeWin: ${{ parameters.vmSizeWin }}
                 region: $(LOCATION)
                 osSKU: ${{ parameters.osSKU }}
+                os: ${{ parameters.os }}
+                osSkuWin: ${{ parameters.osSkuWin }}
 
 # Conditions for below E2E test scenarios confirm that:
 # Pipeline has not been canceled and that the previous job has reports anything other than failure(Succeeded, SuccededWithIssues, Skipped). Previous job is declared by dependsOn:
@@ -87,7 +92,6 @@ stages:
     variables:
       commitID: $[ stagedependencies.setup.env.outputs['SetEnvVars.commitID'] ]
       npmVersion: $[ stagedependencies.setup.env.outputs['SetEnvVars.npmVersion'] ]
-      dropgzVersion: $[ stagedependencies.setup.env.outputs['SetEnvVars.dropgzVersion'] ]
     pool:
       name: $(BUILD_POOL_NAME_DEFAULT)
     dependsOn:
@@ -108,28 +112,32 @@ stages:
                 set -ex
                 make -C ./hack/aks set-kubeconf AZCLI=az CLUSTER=${{ parameters.clusterName }}-$(commitID)
                 echo "Upload CNI"
+                echo "Deploying on Linux nodes"
                 if [ "${{parameters.os}}" == "windows" ]; then
-                  export DROP_GZ_URL=$( make cni-dropgz-test-image-name-and-tag OS='linux' ARCH=${{ parameters.arch }} CNI_DROPGZ_VERSION=$(dropgzVersion))
-                  envsubst < ./test/integration/manifests/cni/cni-installer-v1.yaml | kubectl apply -f -
+                  export CNI_IMAGE=$(make cni-image-name-and-tag OS='linux' ARCH=${{ parameters.arch }} CNI_VERSION=$(make cni-version))
+                  echo "CNI image: $CNI_IMAGE"
+                  envsubst '${CNI_IMAGE}' < ./test/integration/manifests/cni/cni-installer-v1.yaml | kubectl apply -f -
                   kubectl rollout status daemonset/azure-cni -n kube-system
                   echo "Deploying on windows nodes"
-                  export DROP_GZ_URL=$( make cni-dropgz-test-image-name-and-tag OS='windows' ARCH=${{ parameters.arch }}  OS_VERSION=${{ parameters.os_version }} CNI_DROPGZ_VERSION=$(dropgzVersion))
-                  envsubst < ./test/integration/manifests/cni/cni-installer-v1-windows.yaml | kubectl apply -f -
+                  export CNI_IMAGE=$(make cni-image-name-and-tag OS='windows' ARCH=${{ parameters.arch }}  OS_VERSION=${{ parameters.os_version }} CNI_VERSION=$(make cni-version))
+                  echo "CNI image: $CNI_IMAGE"
+                  envsubst '${CNI_IMAGE}' < ./test/integration/manifests/cni/cni-installer-v1-windows.yaml | kubectl apply -f -
                   kubectl rollout status daemonset/azure-cni-windows -n kube-system
                 else
-                  export DROP_GZ_URL=$( make cni-dropgz-test-image-name-and-tag OS=${{ parameters.os }} ARCH=${{ parameters.arch }} CNI_DROPGZ_VERSION=$(dropgzVersion))
-                  envsubst < ./test/integration/manifests/cni/cni-installer-v1.yaml | kubectl apply -f -
+                  export CNI_IMAGE=$(make cni-image-name-and-tag OS=${{ parameters.os }} ARCH=${{ parameters.arch }} CNI_VERSION=$(make cni-version))
+                  echo "CNI image: $CNI_IMAGE"
+                  envsubst '${CNI_IMAGE}' < ./test/integration/manifests/cni/cni-installer-v1.yaml | kubectl apply -f -
                   kubectl rollout status daemonset/azure-cni -n kube-system
                 fi
                 kubectl get pods -A -owide
-            name: "UploadCNI"
-            displayName: "Upload CNI"
+            name: "deployCNI"
+            displayName: "Deploy CNI"
       - template: ../../npm/npm-cni-integration-test.yaml
         parameters:
           clusterName: ${{ parameters.clusterName }}-$(commitID)
           os: ${{ parameters.os }}
-          sub: $(BUILD_VALIDATIONS_SERVICE_CONNECTION)
           os_version: ${{ parameters.os_version }}
+          sub: $(BUILD_VALIDATIONS_SERVICE_CONNECTION)
           tag: $(npmVersion)
           dependsOn: update_cni
       - job: deploy_pods
@@ -223,7 +231,6 @@ stages:
       variables:
         commitID: $[ stagedependencies.setup.env.outputs['SetEnvVars.commitID'] ]
         npmVersion: $[ stagedependencies.setup.env.outputs['SetEnvVars.npmVersion'] ]
-        dropgzVersion: $[ stagedependencies.setup.env.outputs['SetEnvVars.dropgzVersion'] ]
       pool:
         name: $(BUILD_POOL_NAME_DEFAULT)
       dependsOn:

@@ -49,21 +49,17 @@ func (service *HTTPRestService) removeNetworkInfo(networkName string) {
 
 // saveState writes CNS state to persistent store.
 func (service *HTTPRestService) saveState() error {
-	logger.Printf("[Azure CNS] saveState")
-
 	// Skip if a store is not provided.
 	if service.store == nil {
-		logger.Printf("[Azure CNS]  store not initialized.")
+		logger.Printf("[Azure CNS] store not initialized.")
 		return nil
 	}
 
 	// Update time stamp.
 	service.state.TimeStamp = time.Now()
 	err := service.store.Write(storeKey, &service.state)
-	if err == nil {
-		logger.Printf("[Azure CNS]  State saved successfully.\n")
-	} else {
-		logger.Errorf("[Azure CNS]  Failed to save state., err:%v\n", err)
+	if err != nil {
+		logger.Errorf("[Azure CNS] Failed to save state, err: %v", err)
 	}
 
 	return err
@@ -111,9 +107,7 @@ func (service *HTTPRestService) restoreState() {
 	}
 }
 
-func (service *HTTPRestService) saveNetworkContainerGoalState(
-	req cns.CreateNetworkContainerRequest,
-) (types.ResponseCode, string) {
+func (service *HTTPRestService) saveNetworkContainerGoalState(req cns.CreateNetworkContainerRequest) (types.ResponseCode, string) { //nolint // legacy
 	// we don't want to overwrite what other calls may have written
 	service.Lock()
 	defer service.Unlock()
@@ -163,7 +157,7 @@ func (service *HTTPRestService) saveNetworkContainerGoalState(
 		fallthrough
 	case cns.JobObject:
 		fallthrough
-	case cns.COW:
+	case cns.COW, cns.BackendNICNC:
 		fallthrough
 	case cns.WebApps:
 		switch service.state.OrchestratorType {
@@ -177,7 +171,7 @@ func (service *HTTPRestService) saveNetworkContainerGoalState(
 			fallthrough
 		case cns.AzureFirstParty:
 			fallthrough
-		case cns.WebApps: // todo: Is WebApps an OrchastratorType or ContainerType?
+		case cns.WebApps, cns.BackendNICNC: // todo: Is WebApps an OrchastratorType or ContainerType?
 			podInfo, err := cns.UnmarshalPodInfo(req.OrchestratorContext)
 			if err != nil {
 				errBuf := fmt.Sprintf("Unmarshalling %s failed with error %v", req.NetworkContainerType, err)
@@ -414,8 +408,7 @@ func (service *HTTPRestService) getAllNetworkContainerResponses(
 		nmaNCs := map[string]string{}
 		for _, nc := range ncVersionListResp.Containers {
 			// store nmaNCID as lower case to allow case insensitive comparison with nc stored in CNS
-			nmaNCID := cns.SwiftPrefix + strings.ToLower(nc.NetworkContainerID)
-			nmaNCs[nmaNCID] = nc.Version
+			nmaNCs[strings.TrimPrefix(lowerCaseNCGuid(nc.NetworkContainerID), cns.SwiftPrefix)] = nc.Version
 		}
 
 		if !skipNCVersionCheck {
@@ -501,6 +494,7 @@ func (service *HTTPRestService) getAllNetworkContainerResponses(
 			LocalIPConfiguration:       savedReq.LocalIPConfiguration,
 			AllowHostToNCCommunication: savedReq.AllowHostToNCCommunication,
 			AllowNCToHostCommunication: savedReq.AllowNCToHostCommunication,
+			NetworkInterfaceInfo:       savedReq.NetworkInterfaceInfo,
 		}
 
 		// If the NC version check wasn't skipped, take into account the VFP programming status when returning the response
@@ -609,7 +603,7 @@ func (service *HTTPRestService) attachOrDetachHelper(req cns.ConfigureContainerN
 				nmaNCs := map[string]string{}
 				for _, nc := range ncVersionListResp.Containers {
 					// store nmaNCID as lower case to allow case insensitive comparison with nc stored in CNS
-					nmaNCs[strings.ToLower(nc.NetworkContainerID)] = nc.Version
+					nmaNCs[strings.TrimPrefix(lowerCaseNCGuid(nc.NetworkContainerID), cns.SwiftPrefix)] = nc.Version
 				}
 				_, returnCode, message := service.isNCWaitingForUpdate(existing.CreateNetworkContainerRequest.Version, req.NetworkContainerid, nmaNCs)
 				if returnCode == types.NetworkContainerVfpProgramPending {
@@ -686,9 +680,7 @@ func (service *HTTPRestService) getNetPluginDetails() *networkcontainers.NetPlug
 func (service *HTTPRestService) getNetworkContainerDetails(networkContainerID string) (containerstatus, bool) {
 	service.RLock()
 	defer service.RUnlock()
-
 	containerDetails, containerExists := service.state.ContainerStatus[networkContainerID]
-
 	return containerDetails, containerExists
 }
 
@@ -704,9 +696,7 @@ func (service *HTTPRestService) areNCsPresent() bool {
 func (service *HTTPRestService) isNetworkJoined(networkID string) bool {
 	namedLock.LockAcquire(stateJoinedNetworks)
 	defer namedLock.LockRelease(stateJoinedNetworks)
-
 	_, exists := service.state.joinedNetworks[networkID]
-
 	return exists
 }
 
@@ -714,7 +704,6 @@ func (service *HTTPRestService) isNetworkJoined(networkID string) bool {
 func (service *HTTPRestService) setNetworkStateJoined(networkID string) {
 	namedLock.LockAcquire(stateJoinedNetworks)
 	defer namedLock.LockRelease(stateJoinedNetworks)
-
 	service.state.joinedNetworks[networkID] = struct{}{}
 }
 
@@ -766,17 +755,13 @@ func (service *HTTPRestService) SendNCSnapShotPeriodically(ctx context.Context, 
 	}
 }
 
-func (service *HTTPRestService) validateIPConfigsRequest(
-	ipConfigsRequest cns.IPConfigsRequest,
-) (cns.PodInfo, types.ResponseCode, string) {
+func (service *HTTPRestService) validateIPConfigsRequest(ctx context.Context, ipConfigsRequest cns.IPConfigsRequest) (cns.PodInfo, types.ResponseCode, string) {
 	if service.state.OrchestratorType != cns.KubernetesCRD && service.state.OrchestratorType != cns.Kubernetes {
 		return nil, types.UnsupportedOrchestratorType, "ReleaseIPConfig API supported only for kubernetes orchestrator"
 	}
 
 	if ipConfigsRequest.OrchestratorContext == nil {
-		return nil,
-			types.EmptyOrchestratorContext,
-			fmt.Sprintf("OrchastratorContext is not set in the req: %+v", ipConfigsRequest)
+		return nil, types.EmptyOrchestratorContext, fmt.Sprintf("OrchastratorContext is not set in the req: %+v", ipConfigsRequest)
 	}
 
 	// retrieve podinfo from orchestrator context
@@ -828,6 +813,7 @@ func (service *HTTPRestService) populateIPConfigInfoUntransacted(ipConfigStatus 
 	podIPInfo.HostPrimaryIPInfo.PrimaryIP = primaryHostInterface.PrimaryIP
 	podIPInfo.HostPrimaryIPInfo.Subnet = primaryHostInterface.Subnet
 	podIPInfo.HostPrimaryIPInfo.Gateway = primaryHostInterface.Gateway
+	podIPInfo.NICType = cns.InfraNIC
 
 	return nil
 }
@@ -836,9 +822,8 @@ func (service *HTTPRestService) populateIPConfigInfoUntransacted(ipConfigStatus 
 func lowerCaseNCGuid(ncid string) string {
 	ncidHasSwiftPrefix := strings.HasPrefix(ncid, cns.SwiftPrefix)
 	if ncidHasSwiftPrefix {
-		return cns.SwiftPrefix + strings.ToLower(strings.Split(ncid, cns.SwiftPrefix)[1])
+		return cns.SwiftPrefix + strings.ToLower(strings.TrimPrefix(ncid, cns.SwiftPrefix))
 	}
-
 	return strings.ToLower(ncid)
 }
 
@@ -847,9 +832,7 @@ func lowerCaseNCGuid(ncid string) string {
 // the VFP programming is pending
 // This returns success / waitingForUpdate as false in all other cases.
 // V2 is using the nmagent get nc version list api v2 which doesn't need authentication token
-func (service *HTTPRestService) isNCWaitingForUpdate(
-	ncVersion, ncid string, ncVersionList map[string]string,
-) (waitingForUpdate bool, returnCode types.ResponseCode, message string) {
+func (service *HTTPRestService) isNCWaitingForUpdate(ncVersion, ncid string, ncVersionList map[string]string) (waitingForUpdate bool, returnCode types.ResponseCode, message string) {
 	ncStatus, ok := service.state.ContainerStatus[ncid]
 	if ok {
 		if ncStatus.VfpUpdateComplete &&
@@ -869,7 +852,7 @@ func (service *HTTPRestService) isNCWaitingForUpdate(
 
 	// get the ncVersionList with nc GUID as lower case
 	// when looking up if the ncid is present in ncVersionList, convert it to lowercase and then look up
-	nmaProgrammedNCVersionStr, ok := ncVersionList[lowerCaseNCGuid(ncid)]
+	nmaProgrammedNCVersionStr, ok := ncVersionList[strings.TrimPrefix(lowerCaseNCGuid(ncid), cns.SwiftPrefix)]
 	if !ok {
 		// NMA doesn't have this NC that we need programmed yet, bail out
 		logger.Printf("[Azure CNS] Failed to get NC %s doesn't exist in NMAgent NC version list "+
@@ -949,6 +932,11 @@ func (service *HTTPRestService) handlePostNetworkContainers(w http.ResponseWrite
 		}
 		err = service.Listener.Encode(w, &response)
 		logger.Response(service.Name, response, response.Response.ReturnCode, err)
+		return
+	}
+	if err := req.Validate(); err != nil { //nolint:govet // shadow okay
+		logger.Errorf("[Azure CNS] handlePostNetworkContainers failed with error: %s", err.Error())
+		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 

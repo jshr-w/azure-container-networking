@@ -1,35 +1,51 @@
 name: "CodeQL"
 on:
-  workflow_dispatch:
   push:
-    branches: [ master ]
+    branches:
+    - master
+    - release/*
   pull_request:
-    branches: [ master ]
+    branches:
+    - master
+    - release/*
     types:
       - opened
       - reopened
       - synchronize
       - ready_for_review
+  workflow_dispatch:
+  merge_group:
+    types:
+      - checks_requested
 jobs:
   analyze:
     name: Analyze
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        language: [go]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90 # windows Autobuild time increase by 20 minutes https://codeql.github.com/docs/codeql-overview/codeql-changelog/codeql-cli-2.16.4/#golang-1
     permissions:
       actions: read
       contents: read
       security-events: write
-    strategy:
-      fail-fast: false
-      matrix:
-        language: [ 'go' ]
     steps:
+    - name: Setup go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.21'
+        check-latest: true
     - name: Checkout repository
       uses: actions/checkout@v4
     - name: Initialize CodeQL
-      uses: github/codeql-action/init@v2
+      uses: github/codeql-action/init@v3
       with:
         languages: ${{ matrix.language }}
     - name: Autobuild
-      uses: github/codeql-action/autobuild@v2
+      uses: github/codeql-action/autobuild@v3
     - name: Perform CodeQL Analysis
-      uses: github/codeql-action/analyze@v2
+      uses: github/codeql-action/analyze@v3
+      with:
+        category: "/language:${{matrix.language}}"

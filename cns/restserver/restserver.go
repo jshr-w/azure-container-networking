@@ -30,10 +30,8 @@ import (
 // All helper/utility functions - util.go
 // Constants - const.go
 
-var (
-	// Named Lock for accessing different states in httpRestServiceState
-	namedLock = acn.InitNamedLock()
-)
+// Named Lock for accessing different states in httpRestServiceState
+var namedLock = acn.InitNamedLock()
 
 type interfaceGetter interface {
 	GetInterfaces(ctx context.Context) (*wireserver.GetInterfacesResult, error)
@@ -63,17 +61,17 @@ type HTTPRestService struct {
 	networkContainer         *networkcontainers.NetworkContainers
 	PodIPIDByPodInterfaceKey map[string][]string                  // PodInterfaceId is key and value is slice of Pod IP (SecondaryIP) uuids.
 	PodIPConfigState         map[string]cns.IPConfigurationStatus // Secondary IP ID(uuid) is key
-	IPAMPoolMonitor          cns.IPAMPoolMonitor
 	routingTable             *routes.RoutingTable
 	store                    store.KeyValueStore
 	state                    *httpRestServiceState
 	podsPendingIPAssignment  *bounded.TimedSet
 	sync.RWMutex
-	dncPartitionKey         string
-	EndpointState           map[string]*EndpointInfo // key : container id
-	EndpointStateStore      store.KeyValueStore
-	cniConflistGenerator    CNIConflistGenerator
-	generateCNIConflistOnce sync.Once
+	dncPartitionKey            string
+	EndpointState              map[string]*EndpointInfo // key : container id
+	EndpointStateStore         store.KeyValueStore
+	cniConflistGenerator       CNIConflistGenerator
+	generateCNIConflistOnce    sync.Once
+	IPConfigsHandlerMiddleware cns.IPConfigsHandlerMiddleware
 }
 
 type CNIConflistGenerator interface {
@@ -95,6 +93,8 @@ type EndpointInfo struct {
 	PodName       string
 	PodNamespace  string
 	IfnameToIPMap map[string]*IPInfo // key : interface name, value : IPInfo
+	HnsEndpointID string
+	HostVethName  string
 }
 
 type IPInfo struct {
@@ -103,20 +103,26 @@ type IPInfo struct {
 }
 
 type GetHTTPServiceDataResponse struct {
-	HTTPRestServiceData HTTPRestServiceData
-	Response            Response
+	HTTPRestServiceData HTTPRestServiceData `json:"HTTPRestServiceData"`
+	Response            Response            `json:"Response"`
 }
 
 // HTTPRestServiceData represents in-memory CNS data in the debug API paths.
-type HTTPRestServiceData struct {
+// TODO: add json tags for this struct as per linter suggestion, ignored for now as part of revert-PR
+type HTTPRestServiceData struct { //nolint:musttag // not tagging struct for revert-PR
 	PodIPIDByPodInterfaceKey map[string][]string                  // PodInterfaceId is key and value is slice of Pod IP uuids.
 	PodIPConfigState         map[string]cns.IPConfigurationStatus // secondaryipid(uuid) is key
-	IPAMPoolMonitor          cns.IpamPoolMonitorStateSnapshot
 }
 
 type Response struct {
 	ReturnCode types.ResponseCode
 	Message    string
+}
+
+// GetEndpointResponse describes response from the The GetEndpoint API.
+type GetEndpointResponse struct {
+	Response     Response     `json:"response"`
+	EndpointInfo EndpointInfo `json:"endpointInfo"`
 }
 
 // containerstatus is used to save status of an existing container
@@ -243,28 +249,28 @@ func (service *HTTPRestService) Init(config *common.ServiceConfig) error {
 	listener.AddHandler(cns.DeleteNetworkContainer, service.deleteNetworkContainer)
 	listener.AddHandler(cns.GetInterfaceForContainer, service.getInterfaceForContainer)
 	listener.AddHandler(cns.SetOrchestratorType, service.setOrchestratorType)
-	listener.AddHandler(cns.GetNetworkContainerByOrchestratorContext, service.getNetworkContainerByOrchestratorContext)
-	listener.AddHandler(cns.GetAllNetworkContainers, service.getAllNetworkContainers)
+	listener.AddHandler(cns.GetNetworkContainerByOrchestratorContext, service.GetNetworkContainerByOrchestratorContext)
+	listener.AddHandler(cns.GetAllNetworkContainers, service.GetAllNetworkContainers)
 	listener.AddHandler(cns.AttachContainerToNetwork, service.attachNetworkContainerToNetwork)
 	listener.AddHandler(cns.DetachContainerFromNetwork, service.detachNetworkContainerFromNetwork)
 	listener.AddHandler(cns.CreateHnsNetworkPath, service.createHnsNetwork)
 	listener.AddHandler(cns.DeleteHnsNetworkPath, service.deleteHnsNetwork)
 	listener.AddHandler(cns.NumberOfCPUCoresPath, service.getNumberOfCPUCores)
-	listener.AddHandler(cns.CreateHostNCApipaEndpointPath, service.createHostNCApipaEndpoint)
-	listener.AddHandler(cns.DeleteHostNCApipaEndpointPath, service.deleteHostNCApipaEndpoint)
+	listener.AddHandler(cns.CreateHostNCApipaEndpointPath, service.CreateHostNCApipaEndpoint)
+	listener.AddHandler(cns.DeleteHostNCApipaEndpointPath, service.DeleteHostNCApipaEndpoint)
 	listener.AddHandler(cns.PublishNetworkContainer, service.publishNetworkContainer)
 	listener.AddHandler(cns.UnpublishNetworkContainer, service.unpublishNetworkContainer)
-	listener.AddHandler(cns.RequestIPConfig, newHandlerFuncWithHistogram(service.requestIPConfigHandler, httpRequestLatency))
-	listener.AddHandler(cns.RequestIPConfigs, newHandlerFuncWithHistogram(service.requestIPConfigsHandler, httpRequestLatency))
-	listener.AddHandler(cns.ReleaseIPConfig, newHandlerFuncWithHistogram(service.releaseIPConfigHandler, httpRequestLatency))
-	listener.AddHandler(cns.ReleaseIPConfigs, newHandlerFuncWithHistogram(service.releaseIPConfigsHandler, httpRequestLatency))
+	listener.AddHandler(cns.RequestIPConfig, NewHandlerFuncWithHistogram(service.RequestIPConfigHandler, HTTPRequestLatency))
+	listener.AddHandler(cns.RequestIPConfigs, NewHandlerFuncWithHistogram(service.RequestIPConfigsHandler, HTTPRequestLatency))
+	listener.AddHandler(cns.ReleaseIPConfig, NewHandlerFuncWithHistogram(service.ReleaseIPConfigHandler, HTTPRequestLatency))
+	listener.AddHandler(cns.ReleaseIPConfigs, NewHandlerFuncWithHistogram(service.ReleaseIPConfigsHandler, HTTPRequestLatency))
 	listener.AddHandler(cns.NmAgentSupportedApisPath, service.nmAgentSupportedApisHandler)
-	listener.AddHandler(cns.PathDebugIPAddresses, service.handleDebugIPAddresses)
-	listener.AddHandler(cns.PathDebugPodContext, service.handleDebugPodContext)
-	listener.AddHandler(cns.PathDebugRestData, service.handleDebugRestData)
+	listener.AddHandler(cns.PathDebugIPAddresses, service.HandleDebugIPAddresses)
+	listener.AddHandler(cns.PathDebugPodContext, service.HandleDebugPodContext)
+	listener.AddHandler(cns.PathDebugRestData, service.HandleDebugRestData)
 	listener.AddHandler(cns.NetworkContainersURLPath, service.getOrRefreshNetworkContainers)
 	listener.AddHandler(cns.GetHomeAz, service.getHomeAz)
-
+	listener.AddHandler(cns.EndpointPath, service.EndpointHandlerAPI)
 	// handlers for v0.2
 	listener.AddHandler(cns.V2Prefix+cns.SetEnvironmentPath, service.setEnvironment)
 	listener.AddHandler(cns.V2Prefix+cns.CreateNetworkPath, service.createNetwork)
@@ -278,17 +284,18 @@ func (service *HTTPRestService) Init(config *common.ServiceConfig) error {
 	listener.AddHandler(cns.V2Prefix+cns.DeleteNetworkContainer, service.deleteNetworkContainer)
 	listener.AddHandler(cns.V2Prefix+cns.GetInterfaceForContainer, service.getInterfaceForContainer)
 	listener.AddHandler(cns.V2Prefix+cns.SetOrchestratorType, service.setOrchestratorType)
-	listener.AddHandler(cns.V2Prefix+cns.GetNetworkContainerByOrchestratorContext, service.getNetworkContainerByOrchestratorContext)
-	listener.AddHandler(cns.V2Prefix+cns.GetAllNetworkContainers, service.getAllNetworkContainers)
+	listener.AddHandler(cns.V2Prefix+cns.GetNetworkContainerByOrchestratorContext, service.GetNetworkContainerByOrchestratorContext)
+	listener.AddHandler(cns.V2Prefix+cns.GetAllNetworkContainers, service.GetAllNetworkContainers)
 	listener.AddHandler(cns.V2Prefix+cns.AttachContainerToNetwork, service.attachNetworkContainerToNetwork)
 	listener.AddHandler(cns.V2Prefix+cns.DetachContainerFromNetwork, service.detachNetworkContainerFromNetwork)
 	listener.AddHandler(cns.V2Prefix+cns.CreateHnsNetworkPath, service.createHnsNetwork)
 	listener.AddHandler(cns.V2Prefix+cns.DeleteHnsNetworkPath, service.deleteHnsNetwork)
 	listener.AddHandler(cns.V2Prefix+cns.NumberOfCPUCoresPath, service.getNumberOfCPUCores)
-	listener.AddHandler(cns.V2Prefix+cns.CreateHostNCApipaEndpointPath, service.createHostNCApipaEndpoint)
-	listener.AddHandler(cns.V2Prefix+cns.DeleteHostNCApipaEndpointPath, service.deleteHostNCApipaEndpoint)
+	listener.AddHandler(cns.V2Prefix+cns.CreateHostNCApipaEndpointPath, service.CreateHostNCApipaEndpoint)
+	listener.AddHandler(cns.V2Prefix+cns.DeleteHostNCApipaEndpointPath, service.DeleteHostNCApipaEndpoint)
 	listener.AddHandler(cns.V2Prefix+cns.NmAgentSupportedApisPath, service.nmAgentSupportedApisHandler)
 	listener.AddHandler(cns.V2Prefix+cns.GetHomeAz, service.getHomeAz)
+	listener.AddHandler(cns.V2Prefix+cns.EndpointPath, service.EndpointHandlerAPI)
 
 	// Initialize HTTP client to be reused in CNS
 	connectionTimeout, _ := service.GetOption(acn.OptHttpConnectionTimeout).(int)
@@ -348,4 +355,8 @@ func (service *HTTPRestService) MustGenerateCNIConflistOnce() {
 			panic("unable to close the cni conflist output stream: " + err.Error())
 		}
 	})
+}
+
+func (service *HTTPRestService) AttachIPConfigsHandlerMiddleware(middleware cns.IPConfigsHandlerMiddleware) {
+	service.IPConfigsHandlerMiddleware = middleware
 }

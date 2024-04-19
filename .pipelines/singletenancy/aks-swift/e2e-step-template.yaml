@@ -1,6 +1,5 @@
 parameters:
   name: ""
-  testDropgz: ""
   clusterName: ""
 
 steps:
@@ -35,74 +34,18 @@ steps:
       inlineScript: |
         set -e
         make -C ./hack/aks set-kubeconf AZCLI=az CLUSTER=${{ parameters.clusterName }}
-        echo "install kubetest2 and gsutils"
-        go get github.com/onsi/ginkgo/ginkgo
-        go get github.com/onsi/gomega/...
-        go install github.com/onsi/ginkgo/ginkgo@latest
-        go install sigs.k8s.io/kubetest2@latest
-        go install sigs.k8s.io/kubetest2/kubetest2-noop@latest
-        go install sigs.k8s.io/kubetest2/kubetest2-tester-ginkgo@latest
-        wget https://storage.googleapis.com/pub/gsutil.tar.gz
-        tar xfz gsutil.tar.gz
-        sudo mv gsutil /usr/local/bin
-    name: "installKubetest"
-    displayName: "Set up Conformance Tests"
-
-  - ${{ if eq( parameters['testDropgz'], true) }}:
-      - script: |
-          echo "##vso[task.setvariable variable=dropgzVersion]$(make cni-dropgz-test-version)"
-        name: dropgzTestVersion
-        displayName: "Dropgz Test Version"
-  - ${{ else }}:
-      - script: |
-          echo "##vso[task.setvariable variable=dropgzVersion]$(make cni-dropgz-version)"
-        name: dropgzVersion
-        displayName: "Dropgz Version"
+    name: "kubeconfig"
+    displayName: "Set Kubeconfig"
 
   - script: |
       ls -lah
       pwd
       kubectl cluster-info
       kubectl get po -owide -A
-      sudo -E env "PATH=$PATH" make test-integration CNS_VERSION=$(make cns-version) CNI_DROPGZ_VERSION=$(dropgzVersion) INSTALL_CNS=true INSTALL_AZURE_VNET=true TEST_DROPGZ=${{ parameters.testDropgz }}
+      sudo -E env "PATH=$PATH" make test-load SCALE_UP=32 OS_TYPE=linux CNI_TYPE=cniv2 VALIDATE_STATEFILE=true INSTALL_CNS=true INSTALL_AZURE_VNET=true CNS_VERSION=$(make cns-version) CNI_VERSION=$(make cni-version) CLEANUP=true
     retryCountOnTaskFailure: 3
     name: "aksswifte2e"
     displayName: "Run AKS Swift E2E"
-
-  - script: |
-      echo "Logs will be available as a build artifact"
-      ARTIFACT_DIR=$(Build.ArtifactStagingDirectory)/aks-swift-output/
-      echo $ARTIFACT_DIR
-      sudo rm -rf $ARTIFACT_DIR
-      sudo mkdir $ARTIFACT_DIR
-      sudo cp test/integration/logs/* $ARTIFACT_DIR
-    name: "GetLogs"
-    displayName: "Get logs"
-    condition: always()
-
-  - task: PublishBuildArtifacts@1
-    inputs:
-      artifactName: aks-swift-output
-      pathtoPublish: "$(Build.ArtifactStagingDirectory)/aks-swift-output"
-    condition: always()
-
-  - script: |
-      echo "Run Service Conformance E2E"
-      export PATH=${PATH}:/usr/local/bin/gsutil
-      KUBECONFIG=~/.kube/config kubetest2 noop \
-        --test ginkgo -- \
-        --focus-regex "Services.*\[Conformance\].*"
-    name: "servicesConformance"
-    displayName: "Run Services Conformance Tests"
-
-  - script: |
-      echo "Run HostPort Conformance E2E"
-      export PATH=${PATH}:/usr/local/bin/gsutil
-      KUBECONFIG=~/.kube/config kubetest2 noop \
-        --test ginkgo -- \
-        --focus-regex "HostPort.*\[Conformance\].*"
-    name: "hostportConformance"
-    displayName: "Run HostPort Conformance Tests"
 
   - script: |
       echo "Run wireserver and metadata connectivity Tests"
@@ -112,10 +55,11 @@ steps:
     displayName: "Run Wireserver and Metadata Connectivity Tests"
 
   - script: |
-      ARTIFACT_DIR=$(Build.ArtifactStagingDirectory)/aks-swift-output/
-      echo $ARTIFACT_DIR
-      sudo rm -rf $ARTIFACT_DIR
-      sudo rm -rf test/integration/logs
-    name: "Cleanupartifactdir"
-    displayName: "Cleanup artifact dir"
-    condition: always()
+      cd hack/scripts
+      chmod +x async-delete-test.sh
+      ./async-delete-test.sh
+      if ! [ -z $(kubectl -n kube-system get ds  azure-cns | grep non-existing) ]; then
+        kubectl -n kube-system patch daemonset azure-cns --type json -p='[{"op": "remove", "path": "/spec/template/spec/nodeSelector/non-existing"}]'
+      fi
+    name: "testAsyncDelete"
+    displayName: "Verify Async Delete when CNS is down"

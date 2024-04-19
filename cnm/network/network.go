@@ -11,6 +11,7 @@ import (
 	"github.com/Azure/azure-container-networking/cnm"
 	cnsclient "github.com/Azure/azure-container-networking/cns/client"
 	"github.com/Azure/azure-container-networking/common"
+	"github.com/Azure/azure-container-networking/iptables"
 	"github.com/Azure/azure-container-networking/log"
 	"github.com/Azure/azure-container-networking/netio"
 	"github.com/Azure/azure-container-networking/netlink"
@@ -53,7 +54,7 @@ func NewPlugin(config *common.PluginConfig) (NetPlugin, error) {
 
 	nl := netlink.NewNetlink()
 	// Setup network manager.
-	nm, err := network.NewNetworkManager(nl, platform.NewExecClient(nil), &netio.NetIO{})
+	nm, err := network.NewNetworkManager(nl, platform.NewExecClient(nil), &netio.NetIO{}, network.NewNamespaceClient(), iptables.NewClient())
 	if err != nil {
 		return nil, err
 	}
@@ -246,7 +247,7 @@ func (plugin *netPlugin) createEndpoint(w http.ResponseWriter, r *http.Request) 
 	if err != nil {
 		log.Errorf("failed to init CNS client", err)
 	}
-	err = plugin.nm.CreateEndpoint(cnscli, req.NetworkID, &epInfo)
+	err = plugin.nm.CreateEndpoint(cnscli, req.NetworkID, []*network.EndpointInfo{&epInfo})
 	if err != nil {
 		plugin.SendErrorResponse(w, err)
 		return
@@ -272,7 +273,7 @@ func (plugin *netPlugin) deleteEndpoint(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Process request.
-	err = plugin.nm.DeleteEndpoint(req.NetworkID, req.EndpointID)
+	err = plugin.nm.DeleteEndpoint(req.NetworkID, req.EndpointID, nil)
 	if err != nil {
 		plugin.SendErrorResponse(w, err)
 		return

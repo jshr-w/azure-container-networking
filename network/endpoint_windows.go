@@ -15,6 +15,7 @@ import (
 	"github.com/Azure/azure-container-networking/platform"
 	"github.com/Microsoft/hcsshim"
 	"github.com/Microsoft/hcsshim/hcn"
+	"github.com/pkg/errors"
 	"go.uber.org/zap"
 )
 
@@ -64,16 +65,26 @@ func ConstructEndpointID(containerID string, netNsPath string, ifName string) (s
 }
 
 // newEndpointImpl creates a new endpoint in the network.
-func (nw *network) newEndpointImpl(cli apipaClient, _ netlink.NetlinkInterface, plc platform.ExecClient, _ netio.NetIOInterface, _ EndpointClient, epInfo *EndpointInfo) (*endpoint, error) {
-	if useHnsV2, err := UseHnsV2(epInfo.NetNsPath); useHnsV2 {
+func (nw *network) newEndpointImpl(
+	cli apipaClient,
+	_ netlink.NetlinkInterface,
+	plc platform.ExecClient,
+	_ netio.NetIOInterface,
+	_ EndpointClient,
+	_ NamespaceClientInterface,
+	_ ipTablesClient,
+	epInfo []*EndpointInfo,
+) (*endpoint, error) {
+	// there is only 1 epInfo for windows, multiple interfaces will be added in the future
+	if useHnsV2, err := UseHnsV2(epInfo[0].NetNsPath); useHnsV2 {
 		if err != nil {
 			return nil, err
 		}
 
-		return nw.newEndpointImplHnsV2(cli, epInfo)
+		return nw.newEndpointImplHnsV2(cli, epInfo[0])
 	}
 
-	return nw.newEndpointImplHnsV1(epInfo, plc)
+	return nw.newEndpointImplHnsV1(epInfo[0], plc)
 }
 
 // newEndpointImplHnsV1 creates a new endpoint in the network using HnsV1
@@ -400,7 +411,9 @@ func (nw *network) newEndpointImplHnsV2(cli apipaClient, epInfo *EndpointInfo) (
 }
 
 // deleteEndpointImpl deletes an existing endpoint from the network.
-func (nw *network) deleteEndpointImpl(_ netlink.NetlinkInterface, _ platform.ExecClient, _ EndpointClient, ep *endpoint) error {
+func (nw *network) deleteEndpointImpl(_ netlink.NetlinkInterface, _ platform.ExecClient, _ EndpointClient, _ netio.NetIOInterface, _ NamespaceClientInterface,
+	_ ipTablesClient, ep *endpoint,
+) error {
 	if useHnsV2, err := UseHnsV2(ep.NetNs); useHnsV2 {
 		if err != nil {
 			return err
@@ -482,4 +495,29 @@ func (ep *endpoint) getInfoImpl(epInfo *EndpointInfo) {
 // updateEndpointImpl in windows does nothing for now
 func (nm *networkManager) updateEndpointImpl(nw *network, existingEpInfo *EndpointInfo, targetEpInfo *EndpointInfo) (*endpoint, error) {
 	return nil, nil
+}
+
+// GetEndpointInfoByIPImpl returns an endpointInfo with the corrsponding HNS Endpoint ID that matches an specific IP Address.
+func (epInfo *EndpointInfo) GetEndpointInfoByIPImpl(ipAddresses []net.IPNet, networkID string) (*EndpointInfo, error) {
+	// check if network exists, only create the network does not exist
+	hnsResponse, err := Hnsv2.GetNetworkByName(networkID)
+	if err != nil {
+		return epInfo, errors.Wrapf(err, "HNS Network not found")
+	}
+	hcnEndpoints, err := Hnsv2.ListEndpointsOfNetwork(hnsResponse.Id)
+	if err != nil {
+		return epInfo, errors.Wrapf(err, "failed to fetch HNS endpoints for the given network")
+	}
+	for i := range hcnEndpoints {
+		for _, ipConfiguration := range hcnEndpoints[i].IpConfigurations {
+			for _, ipAddress := range ipAddresses {
+				prefixLength, _ := ipAddress.Mask.Size()
+				if ipConfiguration.IpAddress == ipAddress.IP.String() && ipConfiguration.PrefixLength == uint8(prefixLength) {
+					epInfo.HNSEndpointID = hcnEndpoints[i].Id
+					return epInfo, nil
+				}
+			}
+		}
+	}
+	return epInfo, errors.Wrapf(err, "No HNSEndpointID matches the IPAddress: "+ipAddresses[0].IP.String())
 }

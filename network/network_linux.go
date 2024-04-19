@@ -4,7 +4,6 @@
 package network
 
 import (
-	"errors"
 	"fmt"
 	"net"
 	"strconv"
@@ -16,6 +15,7 @@ import (
 	"github.com/Azure/azure-container-networking/network/networkutils"
 	"github.com/Azure/azure-container-networking/ovsctl"
 	"github.com/Azure/azure-container-networking/platform"
+	"github.com/pkg/errors"
 	"go.uber.org/zap"
 	"golang.org/x/sys/unix"
 )
@@ -39,6 +39,8 @@ const (
 	LocalIPKey = "localIP"
 	// InfraVnetIPKey key for infra vnet
 	InfraVnetIPKey = "infraVnetIP"
+	// Ubuntu Release Version for checking which command to use.
+	Ubuntu22 = "22.04"
 )
 
 const (
@@ -91,6 +93,17 @@ func (nm *networkManager) newNetworkImpl(nwInfo *NetworkInfo, extIf *externalInt
 	case opModeTransparentVlan:
 		logger.Info("Transparent vlan mode")
 		ifName = extIf.Name
+		nu := networkutils.NewNetworkUtils(nm.netlink, nm.plClient)
+		if err := nu.EnableIPV4Forwarding(); err != nil {
+			return nil, errors.Wrap(err, "ipv4 forwarding failed")
+		}
+		if err := nu.UpdateIPV6Setting(1); err != nil {
+			return nil, errors.Wrap(err, "failed to disable ipv6 on vm")
+		}
+		// Blocks wireserver traffic from apipa nic
+		if err := nu.BlockEgressTrafficFromContainer(nm.iptablesClient, iptables.V4, networkutils.AzureDNS, iptables.TCP, iptables.HTTPPort); err != nil {
+			return nil, errors.Wrap(err, "unable to insert vm iptables rule drop wireserver packets")
+		}
 	default:
 		return nil, errNetworkModeInvalid
 	}
@@ -243,13 +256,81 @@ func isGreaterOrEqaulUbuntuVersion(versionToMatch int) bool {
 	return false
 }
 
+func (nm *networkManager) systemVersion() (string, error) {
+	osVersion, err := nm.plClient.ExecuteCommand("lsb_release -rs")
+	if err != nil {
+		return osVersion, errors.Wrap(err, "error retrieving the system distribution version")
+	}
+	return osVersion, nil
+}
+
+func (nm *networkManager) addDomain(ifName, domain string) (string, error) {
+	osVersion, err := nm.systemVersion()
+	if err != nil {
+		return osVersion, err
+	}
+
+	var cmd string
+	switch {
+	case strings.HasPrefix(osVersion, Ubuntu22):
+		cmd = fmt.Sprintf("resolvectl domain %s %s", ifName, domain)
+	default:
+		cmd = fmt.Sprintf("systemd-resolve --interface %s --set-domain %s", ifName, domain)
+	}
+	return cmd, nil
+}
+
+func (nm *networkManager) addDNSServers(ifName string, dnsServers []string) (string, error) {
+	osVersion, err := nm.systemVersion()
+	if err != nil {
+		return osVersion, err
+	}
+
+	if len(dnsServers) == 0 {
+		logger.Warn("No dns servers to add")
+		return "", nil
+	}
+
+	var cmd string
+	switch {
+	case strings.HasPrefix(osVersion, Ubuntu22):
+		cmd = fmt.Sprintf("resolvectl dns %s %s", ifName, strings.Join(dnsServers, " "))
+	default:
+		serverList := ""
+		for _, server := range dnsServers {
+			serverList = serverList + " --set-dns " + server
+		}
+		cmd = fmt.Sprintf("systemd-resolve --interface %s %s", ifName, serverList)
+	}
+	return cmd, nil
+}
+
+func (nm *networkManager) ifNameStatus(ifName string) (string, error) {
+	osVersion, err := nm.systemVersion()
+	if err != nil {
+		return osVersion, err
+	}
+	var cmd string
+	switch {
+	case strings.HasPrefix(osVersion, Ubuntu22):
+		cmd = fmt.Sprintf("resolvectl status %s", ifName)
+	default:
+		cmd = fmt.Sprintf("systemd-resolve --status %s", ifName)
+	}
+	return cmd, nil
+}
+
 func (nm *networkManager) readDNSInfo(ifName string) (DNSInfo, error) {
 	var dnsInfo DNSInfo
 
-	cmd := fmt.Sprintf("systemd-resolve --status %s", ifName)
+	cmd, err := nm.ifNameStatus(ifName)
+	if err != nil {
+		return dnsInfo, errors.Wrap(err, "Error generating interface name status cmd")
+	}
+
 	out, err := nm.plClient.ExecuteCommand(cmd)
 	if err != nil {
-		return dnsInfo, err
+		return dnsInfo, errors.Wrapf(err, "Error executing interface status with cmd %s", cmd)
 	}
 
 	logger.Info("console output for above cmd", zap.Any("out", out))
@@ -333,7 +414,8 @@ func (nm *networkManager) applyIPConfig(extIf *externalInterface, targetIf *net.
 
 func (nm *networkManager) applyDNSConfig(extIf *externalInterface, ifName string) error {
 	var (
-		setDnsList string
+		setDNSList []string
+		cmd        string
 		err        error
 	)
 
@@ -344,21 +426,32 @@ func (nm *networkManager) applyDNSConfig(extIf *externalInterface, ifName string
 				continue
 			}
 
-			buf := fmt.Sprintf("--set-dns=%s", server)
-			setDnsList = setDnsList + " " + buf
+			setDNSList = append(setDNSList, server)
 		}
 
-		if setDnsList != "" {
-			cmd := fmt.Sprintf("systemd-resolve --interface=%s%s", ifName, setDnsList)
-			_, err = nm.plClient.ExecuteCommand(cmd)
+		if len(setDNSList) > 0 {
+			cmd, err = nm.addDNSServers(ifName, setDNSList)
 			if err != nil {
-				return err
+				return errors.Wrap(err, "Error generating add DNS Servers cmd")
+			}
+			if cmd != "" {
+				_, err = nm.plClient.ExecuteCommand(cmd)
+				if err != nil {
+					return errors.Wrapf(err, "Error executing add DNS Servers with cmd %s", cmd)
+				}
 			}
 		}
 
 		if extIf.DNSInfo.Suffix != "" {
-			cmd := fmt.Sprintf("systemd-resolve --interface=%s --set-domain=%s", ifName, extIf.DNSInfo.Suffix)
+			cmd, err = nm.addDomain(ifName, extIf.DNSInfo.Suffix)
+			if err != nil {
+				return errors.Wrap(err, "Error generating add domain cmd")
+			}
+
 			_, err = nm.plClient.ExecuteCommand(cmd)
+			if err != nil {
+				return errors.Wrapf(err, "Error executing add Domain with cmd %s", cmd)
+			}
 		}
 
 	}
@@ -373,7 +466,6 @@ func (nm *networkManager) connectExternalInterface(extIf *externalInterface, nwI
 		networkClient NetworkClient
 	)
 
-	logger.Info("Connecting interface", zap.String("Name", extIf.Name))
 	defer func() {
 		logger.Info("Connecting interface completed", zap.String("Name", extIf.Name), zap.Error(err))
 	}()
@@ -452,37 +544,35 @@ func (nm *networkManager) connectExternalInterface(extIf *externalInterface, nwI
 		}
 	}
 
+	logger.Info("Modifying interfaces", zap.String("Name", hostIf.Name))
+
 	// External interface down.
-	logger.Info("Setting link state down", zap.String("Name", hostIf.Name))
 	err = nm.netlink.SetLinkState(hostIf.Name, false)
 	if err != nil {
-		return err
+		return errors.Wrap(err, "failed to set external interface down")
 	}
 
 	// Connect the external interface to the bridge.
-	logger.Info("Setting link master", zap.String("Name", hostIf.Name), zap.String("bridgeName", bridgeName))
 	if err = networkClient.SetBridgeMasterToHostInterface(); err != nil {
-		return err
+		return errors.Wrap(err, "failed to connect external interface to bridge")
 	}
 
 	// External interface up.
-	logger.Info("Setting link state up", zap.String("Name", hostIf.Name))
 	err = nm.netlink.SetLinkState(hostIf.Name, true)
 	if err != nil {
-		return err
+		return errors.Wrap(err, "failed to set external interface up")
 	}
 
 	// Bridge up.
-	logger.Info("Setting link state up", zap.String("bridgeName", bridgeName))
 	err = nm.netlink.SetLinkState(bridgeName, true)
 	if err != nil {
-		return err
+		return errors.Wrap(err, "failed to set bridge link state up")
 	}
 
 	// Add the bridge rules.
 	err = networkClient.AddL2Rules(extIf)
 	if err != nil {
-		return err
+		return errors.Wrap(err, "failed to add bridge rules")
 	}
 
 	// External interface hairpin on.
@@ -501,8 +591,6 @@ func (nm *networkManager) connectExternalInterface(extIf *externalInterface, nwI
 	}
 
 	if isGreaterOrEqualUbuntu17 && isSystemdResolvedActive {
-		logger.Info("Applying dns config on", zap.String("bridgeName", bridgeName))
-
 		if err = nm.applyDNSConfig(extIf, bridgeName); err != nil {
 			logger.Error("Failed to apply DNS configuration with", zap.Error(err))
 			return err
@@ -525,7 +613,7 @@ func (nm *networkManager) connectExternalInterface(extIf *externalInterface, nwI
 
 		// unmark packet if set by kube-proxy to skip kube-postrouting rule and processed
 		// by cni snat rule
-		if err = iptables.InsertIptableRule(iptables.V6, iptables.Mangle, iptables.Postrouting, "", "MARK --set-mark 0x0"); err != nil {
+		if err = nm.iptablesClient.InsertIptableRule(iptables.V6, iptables.Mangle, iptables.Postrouting, "", "MARK --set-mark 0x0"); err != nil {
 			logger.Error("Adding Iptable mangle rule failed", zap.Error(err))
 			return err
 		}
@@ -539,9 +627,7 @@ func (nm *networkManager) connectExternalInterface(extIf *externalInterface, nwI
 
 // DisconnectExternalInterface disconnects a host interface from its bridge.
 func (nm *networkManager) disconnectExternalInterface(extIf *externalInterface, networkClient NetworkClient) {
-	logger.Info("Disconnecting interface", zap.String("Name", extIf.Name))
-
-	logger.Info("Deleting bridge rules")
+	logger.Info("Disconnecting interface and deleting bridge rules", zap.String("Name", extIf.Name))
 	// Delete bridge rules set on the external interface.
 	networkClient.DeleteL2Rules(extIf)
 
@@ -565,10 +651,10 @@ func (nm *networkManager) disconnectExternalInterface(extIf *externalInterface, 
 	logger.Info("Disconnected interface", zap.String("Name", extIf.Name))
 }
 
-func (*networkManager) addToIptables(cmds []iptables.IPTableEntry) error {
+func (nm *networkManager) addToIptables(cmds []iptables.IPTableEntry) error {
 	logger.Info("Adding additional iptable rules...")
 	for _, cmd := range cmds {
-		err := iptables.RunCmd(cmd.Version, cmd.Params)
+		err := nm.iptablesClient.RunCmd(cmd.Version, cmd.Params)
 		if err != nil {
 			return err
 		}
@@ -598,7 +684,7 @@ func (nm *networkManager) addIpv6NatGateway(nwInfo *NetworkInfo) error {
 }
 
 // snat ipv6 traffic to secondary ipv6 ip before leaving VM
-func (*networkManager) addIpv6SnatRule(extIf *externalInterface, nwInfo *NetworkInfo) error {
+func (nm *networkManager) addIpv6SnatRule(extIf *externalInterface, nwInfo *NetworkInfo) error {
 	var (
 		ipv6SnatRuleSet  bool
 		ipv6SubnetPrefix net.IPNet
@@ -616,14 +702,16 @@ func (*networkManager) addIpv6SnatRule(extIf *externalInterface, nwInfo *Network
 	}
 
 	for _, ipAddr := range extIf.IPAddresses {
-		if ipAddr.IP.To4() == nil {
-			logger.Info("Adding ipv6 snat rule")
-			matchSrcPrefix := fmt.Sprintf("-s %s", ipv6SubnetPrefix.String())
-			if err := networkutils.AddSnatRule(matchSrcPrefix, ipAddr.IP); err != nil {
-				return fmt.Errorf("Adding iptable snat rule failed:%w", err)
-			}
-			ipv6SnatRuleSet = true
+		if ipAddr.IP.To4() != nil {
+			continue
 		}
+		logger.Info("Adding ipv6 snat rule")
+		matchSrcPrefix := fmt.Sprintf("-s %s", ipv6SubnetPrefix.String())
+		nu := networkutils.NewNetworkUtils(nm.netlink, nm.plClient)
+		if err := nu.AddSnatRule(nm.iptablesClient, matchSrcPrefix, ipAddr.IP); err != nil {
+			return fmt.Errorf("adding iptable snat rule failed:%w", err)
+		}
+		ipv6SnatRuleSet = true
 	}
 
 	if !ipv6SnatRuleSet {

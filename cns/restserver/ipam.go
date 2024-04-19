@@ -4,28 +4,40 @@
 package restserver
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/Azure/azure-container-networking/cns"
 	"github.com/Azure/azure-container-networking/cns/filter"
 	"github.com/Azure/azure-container-networking/cns/logger"
 	"github.com/Azure/azure-container-networking/cns/types"
 	"github.com/Azure/azure-container-networking/common"
+	"github.com/Azure/azure-container-networking/store"
 	"github.com/pkg/errors"
+	"golang.org/x/exp/maps"
 )
 
 var (
-	ErrStoreEmpty       = errors.New("empty endpoint state store")
-	ErrParsePodIPFailed = errors.New("failed to parse pod's ip")
-	ErrNoNCs            = errors.New("No NCs found in the CNS internal state")
+	ErrStoreEmpty             = errors.New("empty endpoint state store")
+	ErrParsePodIPFailed       = errors.New("failed to parse pod's ip")
+	ErrNoNCs                  = errors.New("no NCs found in the CNS internal state")
+	ErrOptManageEndpointState = errors.New("CNS is not set to manage the endpoint state")
+	ErrEndpointStateNotFound  = errors.New("endpoint state could not be found in the statefile")
 )
 
-// requestIPConfigHandlerHelper validates the request, assigns IPs, and returns a response
-func (service *HTTPRestService) requestIPConfigHandlerHelper(ipconfigsRequest cns.IPConfigsRequest) (*cns.IPConfigsResponse, error) {
-	podInfo, returnCode, returnMessage := service.validateIPConfigsRequest(ipconfigsRequest)
+const (
+	ContainerIDLength = 8
+	InterfaceName     = "eth0"
+)
+
+// requestIPConfigHandlerHelper validates the request, assign IPs and return the IPConfigs
+func (service *HTTPRestService) requestIPConfigHandlerHelper(ctx context.Context, ipconfigsRequest cns.IPConfigsRequest) (*cns.IPConfigsResponse, error) {
+	// For SWIFT v2 scenario, the validator function will also modify the ipconfigsRequest.
+	podInfo, returnCode, returnMessage := service.validateIPConfigsRequest(ctx, ipconfigsRequest)
 	if returnCode != types.Success {
 		return &cns.IPConfigsResponse{
 			Response: cns.Response{
@@ -38,12 +50,12 @@ func (service *HTTPRestService) requestIPConfigHandlerHelper(ipconfigsRequest cn
 	// record a pod requesting an IP
 	service.podsPendingIPAssignment.Push(podInfo.Key())
 
-	podIPInfo, err := requestIPConfigsHelper(service, ipconfigsRequest)
+	podIPInfo, err := requestIPConfigsHelper(service, ipconfigsRequest) //nolint:contextcheck // appease linter for revert PR
 	if err != nil {
 		return &cns.IPConfigsResponse{
 			Response: cns.Response{
 				ReturnCode: types.FailedToAllocateIPConfig,
-				Message:    fmt.Sprintf("AllocateIPConfig failed: %v, IP config request is %s", err, ipconfigsRequest),
+				Message:    fmt.Sprintf("AllocateIPConfig failed: %v, IP config request is %v", err, ipconfigsRequest),
 			},
 			PodIPInfo: podIPInfo,
 		}, err
@@ -79,8 +91,8 @@ func (service *HTTPRestService) requestIPConfigHandlerHelper(ipconfigsRequest cn
 	}, nil
 }
 
-// requestIPConfigHandler requests an IPConfig from the CNS state
-func (service *HTTPRestService) requestIPConfigHandler(w http.ResponseWriter, r *http.Request) {
+// RequestIPConfigHandler requests an IPConfig from the CNS state
+func (service *HTTPRestService) RequestIPConfigHandler(w http.ResponseWriter, r *http.Request) {
 	var ipconfigRequest cns.IPConfigRequest
 	err := service.Listener.Decode(w, r, &ipconfigRequest)
 	operationName := "requestIPConfigHandler"
@@ -117,7 +129,7 @@ func (service *HTTPRestService) requestIPConfigHandler(w http.ResponseWriter, r 
 		}
 	}
 
-	ipConfigsResp, errResp := service.requestIPConfigHandlerHelper(ipconfigsRequest) //nolint:contextcheck // appease linter
+	ipConfigsResp, errResp := service.requestIPConfigHandlerHelper(r.Context(), ipconfigsRequest) //nolint:contextcheck // appease linter
 	if errResp != nil {
 		// As this API is expected to return IPConfigResponse, generate it from the IPConfigsResponse returned above
 		reserveResp := &cns.IPConfigResponse{
@@ -154,8 +166,8 @@ func (service *HTTPRestService) requestIPConfigHandler(w http.ResponseWriter, r 
 	logger.ResponseEx(service.Name+operationName, ipconfigsRequest, reserveResp, reserveResp.Response.ReturnCode, err)
 }
 
-// requestIPConfigsHandler requests multiple IPConfigs from the CNS state
-func (service *HTTPRestService) requestIPConfigsHandler(w http.ResponseWriter, r *http.Request) {
+// RequestIPConfigsHandler requests multiple IPConfigs from the CNS state
+func (service *HTTPRestService) RequestIPConfigsHandler(w http.ResponseWriter, r *http.Request) {
 	var ipconfigsRequest cns.IPConfigsRequest
 	err := service.Listener.Decode(w, r, &ipconfigsRequest)
 	operationName := "requestIPConfigsHandler"
@@ -163,8 +175,17 @@ func (service *HTTPRestService) requestIPConfigsHandler(w http.ResponseWriter, r
 	if err != nil {
 		return
 	}
+	var ipConfigsResp *cns.IPConfigsResponse
 
-	ipConfigsResp, err := service.requestIPConfigHandlerHelper(ipconfigsRequest) // nolint:contextcheck // appease linter
+	// Check if IPConfigsHandlerMiddleware is set
+	if service.IPConfigsHandlerMiddleware != nil {
+		// Wrap the default datapath handlers with the middleware
+		wrappedHandler := service.IPConfigsHandlerMiddleware.IPConfigsRequestHandlerWrapper(service.requestIPConfigHandlerHelper, service.ReleaseIPConfigHandlerHelper)
+		ipConfigsResp, err = wrappedHandler(r.Context(), ipconfigsRequest)
+	} else {
+		ipConfigsResp, err = service.requestIPConfigHandlerHelper(r.Context(), ipconfigsRequest) // nolint:contextcheck // appease linter
+	}
+
 	if err != nil {
 		w.Header().Set(cnsReturnCode, ipConfigsResp.Response.ReturnCode.String())
 		err = service.Listener.Encode(w, &ipConfigsResp)
@@ -239,41 +260,49 @@ func (service *HTTPRestService) updateEndpointState(ipconfigsRequest cns.IPConfi
 	return nil
 }
 
-// releaseIPConfigHandlerHelper validates the request and removes the endpoint associated with the pod
-func (service *HTTPRestService) releaseIPConfigHandlerHelper(ipconfigsRequest cns.IPConfigsRequest) (*cns.Response, error) {
-	podInfo, returnCode, returnMessage := service.validateIPConfigsRequest(ipconfigsRequest)
+// ReleaseIPConfigHandlerHelper validates the request and removes the endpoint associated with the pod
+func (service *HTTPRestService) ReleaseIPConfigHandlerHelper(ctx context.Context, ipconfigsRequest cns.IPConfigsRequest) (*cns.IPConfigsResponse, error) {
+	podInfo, returnCode, returnMessage := service.validateIPConfigsRequest(ctx, ipconfigsRequest)
 	if returnCode != types.Success {
-		return &cns.Response{
-			ReturnCode: returnCode,
-			Message:    returnMessage,
+		return &cns.IPConfigsResponse{
+			Response: cns.Response{
+				ReturnCode: returnCode,
+				Message:    returnMessage,
+			},
 		}, fmt.Errorf("failed to validate ip config request") //nolint:goerr113 // return error
 	}
 	// Check if http rest service managed endpoint state is set
 	if service.Options[common.OptManageEndpointState] == true {
 		if err := service.removeEndpointState(podInfo); err != nil {
-			resp := &cns.Response{
-				ReturnCode: types.UnexpectedError,
-				Message:    err.Error(),
+			resp := &cns.IPConfigsResponse{
+				Response: cns.Response{
+					ReturnCode: types.UnexpectedError,
+					Message:    err.Error(),
+				},
 			}
-			return resp, fmt.Errorf("releaseIPConfigHandlerHelper remove endpoint state failed because %v, release IP config info %s", resp.Message, ipconfigsRequest) //nolint:goerr113 // return error
+			return resp, fmt.Errorf("ReleaseIPConfigHandlerHelper remove endpoint state failed : %v, release IP config info %+v", resp.Response.Message, ipconfigsRequest) //nolint:goerr113 // return error
 		}
 	}
 
 	if err := service.releaseIPConfigs(podInfo); err != nil {
-		return &cns.Response{
-			ReturnCode: types.UnexpectedError,
-			Message:    err.Error(),
-		}, fmt.Errorf("releaseIPConfigHandlerHelper releaseIPConfigs failed because %v, release IP config info %s", returnMessage, ipconfigsRequest) //nolint:goerr113 // return error
+		return &cns.IPConfigsResponse{
+			Response: cns.Response{
+				ReturnCode: types.UnexpectedError,
+				Message:    err.Error(),
+			},
+		}, fmt.Errorf("ReleaseIPConfigHandlerHelper releaseIPConfigs failed : %v, release IP config info %+v", returnMessage, ipconfigsRequest) //nolint:goerr113 // return error
 	}
 
-	return &cns.Response{
-		ReturnCode: types.Success,
-		Message:    "",
+	return &cns.IPConfigsResponse{
+		Response: cns.Response{
+			ReturnCode: types.Success,
+			Message:    "",
+		},
 	}, nil
 }
 
-// releaseIPConfigHandler frees the IP assigned to a pod from CNS
-func (service *HTTPRestService) releaseIPConfigHandler(w http.ResponseWriter, r *http.Request) {
+// ReleaseIPConfigHandler frees the IP assigned to a pod from CNS
+func (service *HTTPRestService) ReleaseIPConfigHandler(w http.ResponseWriter, r *http.Request) {
 	var ipconfigRequest cns.IPConfigRequest
 	err := service.Listener.Decode(w, r, &ipconfigRequest)
 	logger.Request(service.Name+"releaseIPConfigHandler", ipconfigRequest, err)
@@ -313,20 +342,20 @@ func (service *HTTPRestService) releaseIPConfigHandler(w http.ResponseWriter, r 
 		Ifname:              ipconfigRequest.Ifname,
 	}
 
-	resp, err := service.releaseIPConfigHandlerHelper(ipconfigsRequest)
+	resp, err := service.ReleaseIPConfigHandlerHelper(r.Context(), ipconfigsRequest)
 	if err != nil {
-		w.Header().Set(cnsReturnCode, resp.ReturnCode.String())
+		w.Header().Set(cnsReturnCode, resp.Response.ReturnCode.String())
 		err = service.Listener.Encode(w, &resp)
-		logger.ResponseEx(service.Name, ipconfigRequest, resp, resp.ReturnCode, err)
+		logger.ResponseEx(service.Name, ipconfigRequest, resp, resp.Response.ReturnCode, err)
 	}
 
-	w.Header().Set(cnsReturnCode, resp.ReturnCode.String())
+	w.Header().Set(cnsReturnCode, resp.Response.ReturnCode.String())
 	err = service.Listener.Encode(w, &resp)
-	logger.ResponseEx(service.Name, ipconfigRequest, resp, resp.ReturnCode, err)
+	logger.ResponseEx(service.Name, ipconfigRequest, resp, resp.Response.ReturnCode, err)
 }
 
-// releaseIPConfigsHandler frees multiple IPConfigs from the CNS state
-func (service *HTTPRestService) releaseIPConfigsHandler(w http.ResponseWriter, r *http.Request) {
+// ReleaseIPConfigsHandler frees multiple IPConfigs from the CNS state
+func (service *HTTPRestService) ReleaseIPConfigsHandler(w http.ResponseWriter, r *http.Request) {
 	var ipconfigsRequest cns.IPConfigsRequest
 	err := service.Listener.Decode(w, r, &ipconfigsRequest)
 	logger.Request(service.Name+"releaseIPConfigsHandler", ipconfigsRequest, err)
@@ -335,23 +364,23 @@ func (service *HTTPRestService) releaseIPConfigsHandler(w http.ResponseWriter, r
 			ReturnCode: types.UnexpectedError,
 			Message:    err.Error(),
 		}
-		logger.Errorf("releaseIPConfigsHandler decode failed because %v, release IP config info %s", resp.Message, ipconfigsRequest)
+		logger.Errorf("releaseIPConfigsHandler decode failed because %v, release IP config info %+v", resp.Message, ipconfigsRequest)
 		w.Header().Set(cnsReturnCode, resp.ReturnCode.String())
 		err = service.Listener.Encode(w, &resp)
 		logger.ResponseEx(service.Name, ipconfigsRequest, resp, resp.ReturnCode, err)
 		return
 	}
 
-	resp, err := service.releaseIPConfigHandlerHelper(ipconfigsRequest)
+	resp, err := service.ReleaseIPConfigHandlerHelper(r.Context(), ipconfigsRequest)
 	if err != nil {
-		w.Header().Set(cnsReturnCode, resp.ReturnCode.String())
+		w.Header().Set(cnsReturnCode, resp.Response.ReturnCode.String())
 		err = service.Listener.Encode(w, &resp)
-		logger.ResponseEx(service.Name, ipconfigsRequest, resp, resp.ReturnCode, err)
+		logger.ResponseEx(service.Name, ipconfigsRequest, resp, resp.Response.ReturnCode, err)
 	}
 
-	w.Header().Set(cnsReturnCode, resp.ReturnCode.String())
+	w.Header().Set(cnsReturnCode, resp.Response.ReturnCode.String())
 	err = service.Listener.Encode(w, &resp)
-	logger.ResponseEx(service.Name, ipconfigsRequest, resp, resp.ReturnCode, err)
+	logger.ResponseEx(service.Name, ipconfigsRequest, resp, resp.Response.ReturnCode, err)
 }
 
 func (service *HTTPRestService) removeEndpointState(podInfo cns.PodInfo) error {
@@ -414,6 +443,65 @@ func (service *HTTPRestService) MarkIPAsPendingRelease(totalIpsToRelease int) (m
 	return pendingReleasedIps, nil
 }
 
+// MarkIPAsPendingRelease will attempt to set [n] number of ips to PendingRelease state.
+// It will start with any IPs in PendingProgramming state and then move on to any IPs in Allocated state
+// until it has reached the target release quantity.
+// If it is unable to set the expected number of IPs to PendingRelease, it will revert the changed IPs
+// and return an error.
+// MarkNIPsPendingRelease is no-op if [n] is not a positive integer.
+func (service *HTTPRestService) MarkNIPsPendingRelease(n int) (map[string]cns.IPConfigurationStatus, error) {
+	service.Lock()
+	defer service.Unlock()
+	// try to release from PendingProgramming
+	pendingProgrammingIPs := make(map[string]cns.IPConfigurationStatus)
+	for uuid, ipConfig := range service.PodIPConfigState { //nolint:gocritic // intentional value copy
+		if n <= 0 {
+			break
+		}
+		if ipConfig.GetState() == types.PendingProgramming {
+			updatedIPConfig, err := service.updateIPConfigState(uuid, types.PendingRelease, ipConfig.PodInfo)
+			if err != nil {
+				return nil, err
+			}
+
+			pendingProgrammingIPs[uuid] = updatedIPConfig
+			n--
+		}
+	}
+
+	// try to release from Available
+	availableIPs := make(map[string]cns.IPConfigurationStatus)
+	for uuid, ipConfig := range service.PodIPConfigState { //nolint:gocritic // intentional value copy
+		if n <= 0 {
+			break
+		}
+		if ipConfig.GetState() == types.Available {
+			updatedIPConfig, err := service.updateIPConfigState(uuid, types.PendingRelease, ipConfig.PodInfo)
+			if err != nil {
+				return nil, err
+			}
+
+			availableIPs[uuid] = updatedIPConfig
+			n--
+		}
+	}
+
+	// if we can release the requested quantity, return the IPs
+	if n <= 0 {
+		maps.Copy(pendingProgrammingIPs, availableIPs)
+		return pendingProgrammingIPs, nil
+	}
+
+	// else revert changes
+	for uuid, ipConfig := range pendingProgrammingIPs { //nolint:gocritic // intentional value copy
+		_, _ = service.updateIPConfigState(uuid, types.PendingProgramming, ipConfig.PodInfo)
+	}
+	for uuid, ipConfig := range availableIPs { //nolint:gocritic // intentional value copy
+		_, _ = service.updateIPConfigState(uuid, types.Available, ipConfig.PodInfo)
+	}
+	return nil, errors.New("unable to release requested number of IPs")
+}
+
 // TODO: Add a change so that we should only update the current state if it is different than the new state
 func (service *HTTPRestService) updateIPConfigState(ipID string, updatedState types.IPState, podInfo cns.PodInfo) (cns.IPConfigurationStatus, error) {
 	if ipConfig, found := service.PodIPConfigState[ipID]; found {
@@ -424,7 +512,7 @@ func (service *HTTPRestService) updateIPConfigState(ipID string, updatedState ty
 		return ipConfig, nil
 	}
 
-	//nolint:goerr113
+	//nolint:goerr113 //legacy
 	return cns.IPConfigurationStatus{}, fmt.Errorf("[updateIPConfigState] Failed to update state %s for the IPConfig. ID %s not found PodIPConfigState", updatedState, ipID)
 }
 
@@ -472,7 +560,7 @@ func (service *HTTPRestService) GetPodIPConfigState() map[string]cns.IPConfigura
 	return podIPConfigState
 }
 
-func (service *HTTPRestService) handleDebugPodContext(w http.ResponseWriter, r *http.Request) {
+func (service *HTTPRestService) HandleDebugPodContext(w http.ResponseWriter, r *http.Request) { //nolint
 	service.RLock()
 	defer service.RUnlock()
 	resp := cns.GetPodContextResponse{
@@ -482,25 +570,20 @@ func (service *HTTPRestService) handleDebugPodContext(w http.ResponseWriter, r *
 	logger.Response(service.Name, resp, resp.Response.ReturnCode, err)
 }
 
-func (service *HTTPRestService) handleDebugRestData(w http.ResponseWriter, r *http.Request) {
+func (service *HTTPRestService) HandleDebugRestData(w http.ResponseWriter, r *http.Request) { //nolint
 	service.RLock()
 	defer service.RUnlock()
-	if service.IPAMPoolMonitor == nil {
-		http.Error(w, "not ready", http.StatusServiceUnavailable)
-		return
-	}
 	resp := GetHTTPServiceDataResponse{
 		HTTPRestServiceData: HTTPRestServiceData{
 			PodIPIDByPodInterfaceKey: service.PodIPIDByPodInterfaceKey,
 			PodIPConfigState:         service.PodIPConfigState,
-			IPAMPoolMonitor:          service.IPAMPoolMonitor.GetStateSnapshot(),
 		},
 	}
 	err := service.Listener.Encode(w, &resp)
 	logger.Response(service.Name, resp, resp.Response.ReturnCode, err)
 }
 
-func (service *HTTPRestService) handleDebugIPAddresses(w http.ResponseWriter, r *http.Request) {
+func (service *HTTPRestService) HandleDebugIPAddresses(w http.ResponseWriter, r *http.Request) {
 	var req cns.GetIPAddressesRequest
 	if err := service.Listener.Decode(w, r, &req); err != nil {
 		resp := cns.GetIPAddressStatusResponse{
@@ -588,7 +671,7 @@ func (service *HTTPRestService) releaseIPConfigs(podInfo cns.PodInfo) error {
 	service.Lock()
 	defer service.Unlock()
 	ipsToBeReleased := make([]cns.IPConfigurationStatus, 0)
-
+	logger.Printf("[releaseIPConfigs] Releasing pod with key %s", podInfo.Key())
 	for i, ipID := range service.PodIPIDByPodInterfaceKey[podInfo.Key()] {
 		if ipID != "" {
 			if ipconfig, isExist := service.PodIPConfigState[ipID]; isExist {
@@ -895,4 +978,180 @@ func validateDesiredIPAddresses(desiredIPs []string) error {
 		}
 	}
 	return nil
+}
+
+// EndpointHandlerAPI forwards the endpoint related APIs to GetEndpointHandler or UpdateEndpointHandler based on the http method
+func (service *HTTPRestService) EndpointHandlerAPI(w http.ResponseWriter, r *http.Request) {
+	logger.Printf("[EndpointHandlerAPI] EndpointHandlerAPI received request with http Method %s", r.Method)
+	service.Lock()
+	defer service.Unlock()
+	// Check if CNS is managing the CNI statefile
+	if service.Options[common.OptManageEndpointState] == false {
+		response := cns.Response{
+			ReturnCode: types.UnexpectedError,
+			Message:    fmt.Sprintf("[EndpointHandlerAPI] EndpointHandlerAPI failed with error: %s", ErrOptManageEndpointState),
+		}
+		err := service.Listener.Encode(w, &response)
+		logger.Response(service.Name, response, response.ReturnCode, err)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		service.GetEndpointHandler(w, r)
+	case http.MethodPatch:
+		service.UpdateEndpointHandler(w, r)
+	default:
+		logger.Errorf("[EndpointHandlerAPI] EndpointHandler API expect http Get or Patch method")
+	}
+}
+
+// GetEndpointHandler handles the incoming GetEndpoint requests with http Get method
+func (service *HTTPRestService) GetEndpointHandler(w http.ResponseWriter, r *http.Request) {
+	logger.Printf("[GetEndpointState] GetEndpoint for %s", r.URL.Path)
+	endpointID := strings.TrimPrefix(r.URL.Path, cns.EndpointPath)
+	endpointInfo, err := service.GetEndpointHelper(endpointID)
+	// Check if the request is valid
+	if err != nil {
+		response := GetEndpointResponse{
+			Response: Response{
+				ReturnCode: types.UnexpectedError,
+				Message:    fmt.Sprintf("[GetEndpointState] GetEndpoint failed with error: %s", err.Error()),
+			},
+		}
+		if errors.Is(err, ErrEndpointStateNotFound) {
+			response = GetEndpointResponse{
+				Response: Response{
+					ReturnCode: types.NotFound,
+					Message:    fmt.Sprintf("[GetEndpointState] %s", err.Error()),
+				},
+			}
+		}
+		w.Header().Set(cnsReturnCode, response.Response.ReturnCode.String())
+		err = service.Listener.Encode(w, &response)
+		logger.Response(service.Name, response, response.Response.ReturnCode, err)
+		return
+	}
+	response := GetEndpointResponse{
+		Response: Response{
+			ReturnCode: types.Success,
+			Message:    "[GetEndpointState] GetEndpoint retruned successfully",
+		},
+		EndpointInfo: *endpointInfo,
+	}
+	w.Header().Set(cnsReturnCode, response.Response.ReturnCode.String())
+	err = service.Listener.Encode(w, &response)
+	logger.Response(service.Name, response, response.Response.ReturnCode, err)
+}
+
+// GetEndpointHelper returns the state of the given endpointId
+func (service *HTTPRestService) GetEndpointHelper(endpointID string) (*EndpointInfo, error) {
+	logger.Printf("[GetEndpointState] Get endpoint state for infra container %s", endpointID)
+
+	// Skip if a store is not provided.
+	if service.EndpointStateStore == nil {
+		logger.Printf("[GetEndpointState]  store not initialized.")
+		return nil, ErrStoreEmpty
+	}
+
+	err := service.EndpointStateStore.Read(EndpointStoreKey, &service.EndpointState)
+	if err != nil {
+
+		if errors.Is(err, store.ErrKeyNotFound) {
+			// Nothing to retrieve.
+			logger.Printf("[GetEndpointState]  No endpoint state to retrieve.\n")
+		} else {
+			logger.Errorf("[GetEndpointState]  Failed to retrieve state, err:%v", err)
+		}
+		return nil, errors.Wrap(err, "[GetEndpointState]  Failed to retrieve state")
+	}
+	if endpointInfo, ok := service.EndpointState[endpointID]; ok {
+		logger.Warnf("[GetEndpointState] Found existing endpoint state for container %s", endpointID)
+		return endpointInfo, nil
+	}
+	// This part is a temprory fix if we have endpoint states belong to CNI version 1.4.X on Windows since the states don't have the containerID
+	// In case there was no endpoint founded with ContainerID as the key,
+	// then [First 8 character of containerid]-eth0 will be tried
+	legacyEndpointID := endpointID[:ContainerIDLength] + "-" + InterfaceName
+	if endpointInfo, ok := service.EndpointState[legacyEndpointID]; ok {
+		logger.Warnf("[GetEndpointState] Found existing endpoint state for container %s", legacyEndpointID)
+		return endpointInfo, nil
+	}
+	return nil, ErrEndpointStateNotFound
+}
+
+// UpdateEndpointHandler handles the incoming UpdateEndpoint requests with http Patch method
+func (service *HTTPRestService) UpdateEndpointHandler(w http.ResponseWriter, r *http.Request) {
+	logger.Printf("[updateEndpoint] updateEndpoint for %s", r.URL.Path)
+
+	var req cns.EndpointRequest
+	err := service.Listener.Decode(w, r, &req)
+	endpointID := strings.TrimPrefix(r.URL.Path, cns.EndpointPath)
+	logger.Request(service.Name, &req, err)
+	// Check if the request is valid
+	if err != nil {
+		response := cns.Response{
+			ReturnCode: types.InvalidRequest,
+			Message:    fmt.Sprintf("[updateEndpoint] updateEndpoint failed with error: %s", err.Error()),
+		}
+		w.Header().Set(cnsReturnCode, response.ReturnCode.String())
+		err = service.Listener.Encode(w, &response)
+		logger.Response(service.Name, response, response.ReturnCode, err)
+		return
+	}
+	if req.HostVethName == "" && req.HnsEndpointID == "" {
+		logger.Warnf("[updateEndpoint] No HnsEndpointID or HostVethName has been provided")
+		response := cns.Response{
+			ReturnCode: types.InvalidRequest,
+			Message:    "[updateEndpoint] No HnsEndpointID or HostVethName has been provided",
+		}
+		w.Header().Set(cnsReturnCode, response.ReturnCode.String())
+		err = service.Listener.Encode(w, &response)
+		logger.Response(service.Name, response, response.ReturnCode, err)
+		return
+	}
+	// Update the endpoint state
+	err = service.UpdateEndpointHelper(endpointID, req)
+	if err != nil {
+		response := cns.Response{
+			ReturnCode: types.UnexpectedError,
+			Message:    fmt.Sprintf("[updateEndpoint] updateEndpoint failed with error: %s", err.Error()),
+		}
+		w.Header().Set(cnsReturnCode, response.ReturnCode.String())
+		err = service.Listener.Encode(w, &response)
+		logger.Response(service.Name, response, response.ReturnCode, err)
+		return
+	}
+	response := cns.Response{
+		ReturnCode: types.Success,
+		Message:    "[updateEndpoint] updateEndpoint retruned successfully",
+	}
+	w.Header().Set(cnsReturnCode, response.ReturnCode.String())
+	err = service.Listener.Encode(w, &response)
+	logger.Response(service.Name, response, response.ReturnCode, err)
+}
+
+// UpdateEndpointHelper updates the state of the given endpointId with HNSId or VethName
+func (service *HTTPRestService) UpdateEndpointHelper(endpointID string, req cns.EndpointRequest) error {
+	if service.EndpointStateStore == nil {
+		return ErrStoreEmpty
+	}
+	logger.Printf("[updateEndpoint] Updating endpoint state for infra container %s", endpointID)
+	if endpointInfo, ok := service.EndpointState[endpointID]; ok {
+		logger.Printf("[updateEndpoint] Found existing endpoint state for infra container %s", endpointID)
+		if req.HnsEndpointID != "" {
+			service.EndpointState[endpointID].HnsEndpointID = req.HnsEndpointID
+			logger.Printf("[updateEndpoint] update the endpoint %s with HNSID  %s", endpointID, req.HnsEndpointID)
+		}
+		if req.HostVethName != "" {
+			service.EndpointState[endpointID].HostVethName = req.HostVethName
+			logger.Printf("[updateEndpoint] update the endpoint %s with vethName  %s", endpointID, req.HostVethName)
+		}
+
+		err := service.EndpointStateStore.Write(EndpointStoreKey, service.EndpointState)
+		if err != nil {
+			return fmt.Errorf("[updateEndpoint] failed to write endpoint state to store for pod %s :  %w", endpointInfo.PodName, err)
+		}
+		return nil
+	}
+	return errors.New("[updateEndpoint] endpoint could not be found in the statefile")
 }

@@ -32,16 +32,15 @@ EXE_EXT 	= .exe
 endif
 
 # Interrogate the git repo and set some variables
-REPO_ROOT 		   		 = $(shell git rev-parse --show-toplevel)
-REVISION 		   		?= $(shell git rev-parse --short HEAD)
-ACN_VERSION  	   		?= $(shell git describe --exclude "azure-ipam*" --exclude "dropgz*" --exclude "zapai*" --tags --always)
-AZURE_IPAM_VERSION 		?= $(notdir $(shell git describe --match "azure-ipam*" --tags --always))
-CNI_VERSION        		?= $(ACN_VERSION)
-CNI_DROPGZ_VERSION 		?= $(notdir $(shell git describe --match "dropgz*" --tags --always))
-CNI_DROPGZ_TEST_VERSION ?= $(notdir $(shell git describe --match "dropgz-test*" --tags --always))
-CNS_VERSION  	   		?= $(ACN_VERSION)
-NPM_VERSION        		?= $(ACN_VERSION)
-ZAPAI_VERSION  	   		?= $(notdir $(shell git describe --match "zapai*" --tags --always))
+REPO_ROOT				 = $(shell git rev-parse --show-toplevel)
+REVISION				?= $(shell git rev-parse --short HEAD)
+ACN_VERSION				?= $(shell git describe --exclude "azure-ipam*" --exclude "dropgz*" --exclude "zapai*" --tags --always)
+AZURE_IPAM_VERSION		?= $(notdir $(shell git describe --match "azure-ipam*" --tags --always))
+CNI_VERSION				?= $(ACN_VERSION)
+CNI_DROPGZ_VERSION		?= $(notdir $(shell git describe --match "dropgz*" --tags --always))
+CNS_VERSION				?= $(ACN_VERSION)
+NPM_VERSION				?= $(ACN_VERSION)
+ZAPAI_VERSION			?= $(notdir $(shell git describe --match "zapai*" --tags --always))
 
 # Build directories.
 AZURE_IPAM_DIR = $(REPO_ROOT)/azure-ipam
@@ -102,9 +101,10 @@ NPM_ARCHIVE_NAME = azure-npm-$(GOOS)-$(GOARCH)-$(NPM_VERSION).$(ARCHIVE_EXT)
 AZURE_IPAM_ARCHIVE_NAME = azure-ipam-$(GOOS)-$(GOARCH)-$(AZURE_IPAM_VERSION).$(ARCHIVE_EXT)
 
 # Image info file names.
-CNI_DROPGZ_IMAGE_INFO_FILE = cni-dropgz-$(CNI_DROPGZ_VERSION).txt
-CNS_IMAGE_INFO_FILE 	   = azure-cns-$(CNS_VERSION).txt
-NPM_IMAGE_INFO_FILE 	   = azure-npm-$(NPM_VERSION).txt
+CNI_IMAGE_INFO_FILE			= azure-cni-$(CNI_VERSION).txt
+CNI_DROPGZ_IMAGE_INFO_FILE	= cni-dropgz-$(CNI_DROPGZ_VERSION).txt
+CNS_IMAGE_INFO_FILE			= azure-cns-$(CNS_VERSION).txt
+NPM_IMAGE_INFO_FILE			= azure-npm-$(NPM_VERSION).txt
 
 # Docker libnetwork (CNM) plugin v2 image parameters.
 CNM_PLUGIN_IMAGE ?= microsoft/azure-vnet-plugin
@@ -120,10 +120,10 @@ all-binaries-platforms: ## Make all platform binaries
 
 # OS specific binaries/images
 ifeq ($(GOOS),linux)
-all-binaries: acncli azure-cnm-plugin azure-cni-plugin azure-cns azure-npm azure-ipam
+all-binaries: acncli azure-cni-plugin azure-cns azure-npm azure-ipam
 all-images: npm-image cns-image cni-manager-image
 else
-all-binaries: azure-cnm-plugin azure-cni-plugin azure-cns azure-npm
+all-binaries: azure-cni-plugin azure-cns azure-npm
 all-images:
 	@echo "Nothing to build. Skip."
 endif
@@ -133,7 +133,6 @@ azure-cnm-plugin: cnm-binary cnm-archive
 azure-cni-plugin: azure-vnet-binary azure-vnet-ipam-binary azure-vnet-ipamv6-binary azure-vnet-telemetry-binary cni-archive
 azure-cns: azure-cns-binary cns-archive
 acncli: acncli-binary acncli-archive
-azure-cnms: azure-cnms-binary cnms-archive
 azure-npm: azure-npm-binary npm-archive
 azure-ipam: azure-ipam-binary azure-ipam-archive
 
@@ -156,9 +155,6 @@ cni-version: ## prints the cni version
 
 cni-dropgz-version: ## prints the cni-dropgz version
 	@echo $(CNI_DROPGZ_VERSION)
-
-cni-dropgz-test-version: ## prints the cni-dropgz version
-	@echo $(CNI_DROPGZ_TEST_VERSION)
 
 cns-version:
 	@echo $(CNS_VERSION)
@@ -246,19 +242,23 @@ CONTAINER_TRANSPORT = docker
 endif
 
 ## Image name definitions.
-ACNCLI_IMAGE     	  = acncli
-CNI_DROPGZ_IMAGE 	  = cni-dropgz
-CNI_DROPGZ_TEST_IMAGE = cni-dropgz-test
-CNS_IMAGE        	  = azure-cns
-NPM_IMAGE        	  = azure-npm
+ACNCLI_IMAGE		= acncli
+AZURE_IPAM_IMAGE	= azure-ipam
+CNI_IMAGE			= azure-cni
+CNI_DROPGZ_IMAGE	= cni-dropgz
+CNS_IMAGE			= azure-cns
+NPM_IMAGE			= azure-npm
 
 ## Image platform tags.
-ACNCLI_PLATFORM_TAG    		 ?= $(subst /,-,$(PLATFORM))$(if $(OS_VERSION),-$(OS_VERSION),)-$(ACN_VERSION)
-CNI_DROPGZ_PLATFORM_TAG 	 ?= $(subst /,-,$(PLATFORM))$(if $(OS_VERSION),-$(OS_VERSION),)-$(CNI_DROPGZ_VERSION)
-CNI_DROPGZ_TEST_PLATFORM_TAG ?= $(subst /,-,$(PLATFORM))$(if $(OS_VERSION),-$(OS_VERSION),)-$(CNI_DROPGZ_TEST_VERSION)
-CNS_PLATFORM_TAG        	 ?= $(subst /,-,$(PLATFORM))$(if $(OS_VERSION),-$(OS_VERSION),)-$(CNS_VERSION)
-CNS_WINDOWS_PLATFORM_TAG 	 ?= $(subst /,-,$(PLATFORM))$(if $(OS_VERSION),-$(OS_VERSION),)-$(CNS_VERSION)-$(OS_SKU_WIN)
-NPM_PLATFORM_TAG        	 ?= $(subst /,-,$(PLATFORM))$(if $(OS_VERSION),-$(OS_VERSION),)-$(NPM_VERSION)
+ACNCLI_PLATFORM_TAG				?= $(subst /,-,$(PLATFORM))$(if $(OS_VERSION),-$(OS_VERSION),)-$(ACN_VERSION)
+AZURE_IPAM_PLATFORM_TAG			?= $(subst /,-,$(PLATFORM))$(if $(OS_VERSION),-$(OS_VERSION),)-$(AZURE_IPAM_VERSION)
+AZURE_IPAM_WINDOWS_PLATFORM_TAG	?= $(subst /,-,$(PLATFORM))$(if $(OS_VERSION),-$(OS_VERSION),)-$(AZURE_IPAM_VERSION)-$(OS_SKU_WIN)
+CNI_PLATFORM_TAG				?= $(subst /,-,$(PLATFORM))$(if $(OS_VERSION),-$(OS_VERSION),)-$(CNI_VERSION)
+CNI_WINDOWS_PLATFORM_TAG		?= $(subst /,-,$(PLATFORM))$(if $(OS_VERSION),-$(OS_VERSION),)-$(CNI_VERSION)-$(OS_SKU_WIN)
+CNI_DROPGZ_PLATFORM_TAG 		?= $(subst /,-,$(PLATFORM))$(if $(OS_VERSION),-$(OS_VERSION),)-$(CNI_DROPGZ_VERSION)
+CNS_PLATFORM_TAG				?= $(subst /,-,$(PLATFORM))$(if $(OS_VERSION),-$(OS_VERSION),)-$(CNS_VERSION)
+CNS_WINDOWS_PLATFORM_TAG		?= $(subst /,-,$(PLATFORM))$(if $(OS_VERSION),-$(OS_VERSION),)-$(CNS_VERSION)-$(OS_SKU_WIN)
+NPM_PLATFORM_TAG				?= $(subst /,-,$(PLATFORM))$(if $(OS_VERSION),-$(OS_VERSION),)-$(NPM_VERSION)
 
 
 qemu-user-static: ## Set up the host to run qemu multiplatform container builds.
@@ -330,6 +330,67 @@ acncli-image-pull: ## pull cni-manager container image.
 		IMAGE=$(ACNCLI_IMAGE) \
 		TAG=$(ACNCLI_PLATFORM_TAG)
 
+
+# azure-ipam
+
+azure-ipam-image-name: # util target to print the azure-ipam  image name.
+	@echo $(AZURE_IPAM_IMAGE)
+
+azure-ipam-image-name-and-tag: # util target to print the azure-ipam image name and tag.
+	@echo $(IMAGE_REGISTRY)/$(AZURE_IPAM_IMAGE):$(AZURE_IPAM_PLATFORM_TAG)
+
+azure-ipam-image: ## build azure-ipam container image.
+	$(MAKE) container \
+		DOCKERFILE=azure-ipam/$(OS).Dockerfile \
+		IMAGE=$(AZURE_IPAM_IMAGE) \
+		EXTRA_BUILD_ARGS='--build-arg OS=$(OS) --build-arg ARCH=$(ARCH) --build-arg OS_VERSION=$(OS_VERSION)' \
+		PLATFORM=$(PLATFORM) \
+		TAG=$(AZURE_IPAM_PLATFORM_TAG) \
+		OS=$(OS) \
+		ARCH=$(ARCH) \
+		OS_VERSION=$(OS_VERSION)
+
+azure-ipam-image-push: ## push azure-ipam container image.
+	$(MAKE) container-push \
+		IMAGE=$(AZURE_IPAM_IMAGE) \
+		TAG=$(AZURE_IPAM_PLATFORM_TAG)
+
+azure-ipam-image-pull: ## pull azure-ipam container image.
+	$(MAKE) container-pull \
+		IMAGE=$(AZURE_IPAM_IMAGE) \
+		TAG=$(AZURE_IPAM_PLATFORM_TAG)
+
+
+# cni
+
+cni-image-name: # util target to print the cni image name.
+	@echo $(CNI_IMAGE)
+
+cni-image-name-and-tag: # util target to print the cni image name and tag.
+	@echo $(IMAGE_REGISTRY)/$(CNI_IMAGE):$(CNI_PLATFORM_TAG)
+
+cni-image: ## build cni container image.
+	$(MAKE) container \
+		DOCKERFILE=cni/$(OS).Dockerfile \
+		IMAGE=$(CNI_IMAGE) \
+		EXTRA_BUILD_ARGS='--build-arg OS=$(OS) --build-arg ARCH=$(ARCH) --build-arg OS_VERSION=$(OS_VERSION)' \
+		PLATFORM=$(PLATFORM) \
+		TAG=$(CNI_PLATFORM_TAG) \
+		OS=$(OS) \
+		ARCH=$(ARCH) \
+		OS_VERSION=$(OS_VERSION)
+
+cni-image-push: ## push cni container image.
+	$(MAKE) container-push \
+		IMAGE=$(CNI_IMAGE) \
+		TAG=$(CNI_PLATFORM_TAG)
+
+cni-image-pull: ## pull cni container image.
+	$(MAKE) container-pull \
+		IMAGE=$(CNI_IMAGE) \
+		TAG=$(CNI_PLATFORM_TAG)
+
+
 # cni-dropgz
 
 cni-dropgz-image-name: # util target to print the CNI dropgz image name.
@@ -355,30 +416,6 @@ cni-dropgz-image-pull: ## pull cni-dropgz container image.
 		IMAGE=$(CNI_DROPGZ_IMAGE) \
 		TAG=$(CNI_DROPGZ_PLATFORM_TAG)
 
-# cni-dropgz-test
-
-cni-dropgz-test-image-name: # util target to print the CNI dropgz test image name.
-	@echo $(CNI_DROPGZ_TEST_IMAGE)
-
-cni-dropgz-test-image-name-and-tag: # util target to print the CNI dropgz test image name and tag.
-	@echo $(IMAGE_REGISTRY)/$(CNI_DROPGZ_TEST_IMAGE):$(CNI_DROPGZ_TEST_PLATFORM_TAG)
-
-cni-dropgz-test-image: ## build cni-dropgz-test container image.
-	$(MAKE) container \
-		DOCKERFILE=dropgz/build/cniTest_$(OS).Dockerfile \
-		EXTRA_BUILD_ARGS='--build-arg OS=$(OS)  --build-arg ARCH=$(ARCH) --build-arg OS_VERSION=$(OS_VERSION)' \
-		IMAGE=$(CNI_DROPGZ_TEST_IMAGE) \
-		TAG=$(CNI_DROPGZ_TEST_PLATFORM_TAG)
-
-cni-dropgz-test-image-push: ## push cni-dropgz-test container image.
-	$(MAKE) container-push \
-		IMAGE=$(CNI_DROPGZ_TEST_IMAGE) \
-		TAG=$(CNI_DROPGZ_TEST_PLATFORM_TAG)
-
-cni-dropgz-test-image-pull: ## pull cni-dropgz-test container image.
-	$(MAKE) container-pull \
-		IMAGE=$(CNI_DROPGZ_TEST_IMAGE) \
-		TAG=$(CNI_DROPGZ_TEST_PLATFORM_TAG)
 
 # cns
 
@@ -499,7 +536,7 @@ manifest-push: # util target to push multiarch container manifest.
 	$(CONTAINER_BUILDER) manifest push --all $(IMAGE_REGISTRY)/$(IMAGE):$(TAG) docker://$(IMAGE_REGISTRY)/$(IMAGE):$(TAG)
 
 manifest-skopeo-archive: # util target to export tar archive of multiarch container manifest.
-	skopeo copy --all docker://$(IMAGE_REGISTRY)/$(IMAGE):$(TAG) oci-archive:$(IMAGE_ARCHIVE_DIR)/$(IMAGE)-$(TAG).tar
+	skopeo copy --all docker://$(IMAGE_REGISTRY)/$(IMAGE):$(TAG) oci-archive:$(IMAGE_ARCHIVE_DIR)/$(IMAGE)-$(TAG).tar --debug
 
 ## Build specific multiplat images.
 
@@ -519,6 +556,40 @@ acncli-skopeo-archive: ## export tar archive of acncli multiplat container manif
 		IMAGE=$(ACNCLI_IMAGE) \
 		TAG=$(ACN_VERSION)
 
+azure-ipam-manifest-build: ## build azure-ipam multiplat container manifest.
+	$(MAKE) manifest-build \
+		PLATFORMS="$(PLATFORMS)" \
+		IMAGE=$(AZURE_IPAM_IMAGE) \
+		TAG=$(AZURE_IPAM_VERSION) \
+		OS_VERSIONS="$(OS_VERSIONS)"
+
+azure-ipam-manifest-push: ## push azure-ipam multiplat container manifest
+	$(MAKE) manifest-push \
+		IMAGE=$(AZURE_IPAM_IMAGE) \
+		TAG=$(AZURE_IPAM_VERSION)
+
+azure-ipam-skopeo-archive: ## export tar archive of azure-ipam multiplat container manifest.
+	$(MAKE) manifest-skopeo-archive \
+		IMAGE=$(AZURE_IPAM_IMAGE) \
+		TAG=$(AZURE_IPAM_VERSION)
+
+cni-manifest-build: ## build cni multiplat container manifest.
+	$(MAKE) manifest-build \
+		PLATFORMS="$(PLATFORMS)" \
+		IMAGE=$(CNI_IMAGE) \
+		TAG=$(CNI_VERSION) \
+		OS_VERSIONS="$(OS_VERSIONS)"
+
+cni-manifest-push: ## push cni multiplat container manifest
+	$(MAKE) manifest-push \
+		IMAGE=$(CNI_IMAGE) \
+		TAG=$(CNI_VERSION)
+
+cni-skopeo-archive: ## export tar archive of cni multiplat container manifest.
+	$(MAKE) manifest-skopeo-archive \
+		IMAGE=$(CNI_IMAGE) \
+		TAG=$(CNI_VERSION)
+
 cni-dropgz-manifest-build: ## build cni-dropgz multiplat container manifest.
 	$(MAKE) manifest-build \
 		PLATFORMS="$(PLATFORMS)" \
@@ -535,23 +606,6 @@ cni-dropgz-skopeo-archive: ## export tar archive of cni-dropgz multiplat contain
 	$(MAKE) manifest-skopeo-archive \
 		IMAGE=$(CNI_DROPGZ_IMAGE) \
 		TAG=$(CNI_DROPGZ_VERSION)
-
-cni-dropgz-test-manifest-build: ## build cni-dropgz multiplat container manifest.
-	$(MAKE) manifest-build \
-		PLATFORMS="$(PLATFORMS)" \
-		IMAGE=$(CNI_DROPGZ_TEST_IMAGE) \
-		TAG=$(CNI_DROPGZ_TEST_VERSION) \
-		OS_VERSIONS="$(OS_VERSIONS)"
-
-cni-dropgz-test-manifest-push: ## push cni-dropgz multiplat container manifest
-	$(MAKE) manifest-push \
-		IMAGE=$(CNI_DROPGZ_TEST_IMAGE) \
-		TAG=$(CNI_DROPGZ_TEST_VERSION)
-
-cni-dropgz-test-skopeo-archive: ## export tar archive of cni-dropgz multiplat container manifest.
-	$(MAKE) manifest-skopeo-archive \
-		IMAGE=$(CNI_DROPGZ_TEST_IMAGE) \
-		TAG=$(CNI_DROPGZ_TEST_VERSION)
 
 cns-manifest-build: ## build azure-cns multiplat container manifest.
 	$(MAKE) manifest-build \
@@ -607,14 +661,14 @@ ifeq ($(GOOS),linux)
 endif
 	cd $(CNI_MULTITENANCY_BUILD_DIR) && $(ARCHIVE_CMD) $(CNI_MULTITENANCY_ARCHIVE_NAME) azure-vnet$(EXE_EXT) azure-vnet-ipam$(EXE_EXT) azure-vnet-telemetry$(EXE_EXT) 10-azure.conflist azure-vnet-telemetry.config
 
+ifeq ($(GOOS),linux)
 	$(MKDIR) $(CNI_MULTITENANCY_TRANSPARENT_VLAN_BUILD_DIR)
 	cp cni/azure-$(GOOS)-multitenancy-transparent-vlan.conflist $(CNI_MULTITENANCY_TRANSPARENT_VLAN_BUILD_DIR)/10-azure.conflist
-	cp $(CNI_BUILD_DIR)/azure-vnet$(EXE_EXT) $(CNI_BUILD_DIR)/azure-vnet-ipam$(EXE_EXT) $(CNI_MULTITENANCY_TRANSPARENT_VLAN_BUILD_DIR)
-ifeq ($(GOOS),linux)
+	cp $(CNI_BUILD_DIR)/azure-vnet$(EXE_EXT) $(CNI_MULTITENANCY_TRANSPARENT_VLAN_BUILD_DIR)
 	cp telemetry/azure-vnet-telemetry.config $(CNI_MULTITENANCY_TRANSPARENT_VLAN_BUILD_DIR)/azure-vnet-telemetry.config
 	cp $(CNI_BUILD_DIR)/azure-vnet-telemetry$(EXE_EXT) $(CNI_MULTITENANCY_TRANSPARENT_VLAN_BUILD_DIR)
+	cd $(CNI_MULTITENANCY_TRANSPARENT_VLAN_BUILD_DIR) && $(ARCHIVE_CMD) $(CNI_MULTITENANCY_TRANSPARENT_VLAN_ARCHIVE_NAME) azure-vnet$(EXE_EXT) azure-vnet-telemetry$(EXE_EXT) 10-azure.conflist azure-vnet-telemetry.config
 endif
-	cd $(CNI_MULTITENANCY_TRANSPARENT_VLAN_BUILD_DIR) && $(ARCHIVE_CMD) $(CNI_MULTITENANCY_TRANSPARENT_VLAN_ARCHIVE_NAME) azure-vnet$(EXE_EXT) azure-vnet-ipam$(EXE_EXT) azure-vnet-telemetry$(EXE_EXT) 10-azure.conflist azure-vnet-telemetry.config
 
 	$(MKDIR) $(CNI_SWIFT_BUILD_DIR)
 	cp cni/azure-$(GOOS)-swift.conflist $(CNI_SWIFT_BUILD_DIR)/10-azure.conflist
@@ -688,7 +742,7 @@ clean: ## Clean build artifacts.
 LINT_PKG ?= .
 
 lint: $(GOLANGCI_LINT) ## Fast lint vs default branch showing only new issues.
-	GOGC=20 $(GOLANGCI_LINT) run --new-from-rev master --timeout 10m -v $(LINT_PKG)/...
+	GOGC=20 $(GOLANGCI_LINT) run --timeout 25m -v $(LINT_PKG)/...
 
 lint-all: $(GOLANGCI_LINT) ## Lint the current branch in entirety.
 	GOGC=20 $(GOLANGCI_LINT) run -v $(LINT_PKG)/...
@@ -720,20 +774,22 @@ CNI_TYPE ?= cilium
 test-all: ## run all unit tests.
 	@$(eval COVER_FILTER=`go list --tags ignore_uncovered,ignore_autogenerated $(COVER_PKG)/... | tr '\n' ','`)
 	@echo Test coverpkg: $(COVER_FILTER)
-	go test -mod=readonly -buildvcs=false -tags "unit" -coverpkg=$(COVER_FILTER) -race -covermode atomic -coverprofile=coverage.out $(COVER_PKG)/...
+	go test -mod=readonly -buildvcs=false -tags "unit" --skip 'TestE2E*' -coverpkg=$(COVER_FILTER) -race -covermode atomic -coverprofile=coverage.out $(COVER_PKG)/...
 
 test-integration: ## run all integration tests.
-	CNI_DROPGZ_VERSION=$(CNI_DROPGZ_VERSION) \
+	AZURE_IPAM_VERSION=$(AZURE_IPAM_VERSION) \
+		CNI_VERSION=$(CNI_VERSION) \
 		CNS_VERSION=$(CNS_VERSION) \
-		go test -mod=readonly -buildvcs=false -timeout 1h -coverpkg=./... -race -covermode atomic -coverprofile=coverage.out -tags=integration ./test/integration...
+		go test -mod=readonly -buildvcs=false -timeout 1h -coverpkg=./... -race -covermode atomic -coverprofile=coverage.out -tags=integration --skip 'TestE2E*' ./test/integration...
 
 test-load: ## run all load tests
-	CNI_DROPGZ_VERSION=$(CNI_DROPGZ_VERSION) \
+	AZURE_IPAM_VERSION=$(AZURE_IPAM_VERSION) \
+		CNI_VERSION=$(CNI_VERSION)
 		CNS_VERSION=$(CNS_VERSION) \
-		go test -timeout 30m -race -tags=load ./test/integration/load...
+		go test -timeout 30m -race -tags=load ./test/integration/load... -v
 
 test-validate-state:
-	cd test/integration/load && go test -mod=readonly -count=1 -timeout 30m -tags load -run ^TestValidateState
+	cd test/integration/load && go test -mod=readonly -count=1 -timeout 30m -tags load --skip 'TestE2E*' -run ^TestValidateState
 	cd ../../..
 
 test-cyclonus: ## run the cyclonus test for npm.

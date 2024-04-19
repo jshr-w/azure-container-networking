@@ -115,6 +115,11 @@ func (ipm *IPStateManager) ReleaseIPConfig(ipconfigID string) (cns.IPConfigurati
 	return ipm.AvailableIPConfigState[ipconfigID], nil
 }
 
+func (ipm *IPStateManager) MarkNIPsPendingRelease(n int) (map[string]cns.IPConfigurationStatus, error) {
+	// MarkIPASPendingRelease actually already errors if it is unable to release all N IPs
+	return ipm.MarkIPAsPendingRelease(n)
+}
+
 func (ipm *IPStateManager) MarkIPAsPendingRelease(numberOfIPsToMark int) (map[string]cns.IPConfigurationStatus, error) {
 	ipm.Lock()
 	defer ipm.Unlock()
@@ -256,6 +261,10 @@ func (fake *HTTPServiceFake) GetPodIPConfigState() map[string]cns.IPConfiguratio
 	return ipconfigs
 }
 
+func (fake *HTTPServiceFake) MarkNIPsPendingRelease(n int) (map[string]cns.IPConfigurationStatus, error) {
+	return fake.IPStateManager.MarkIPAsPendingRelease(n)
+}
+
 // TODO: Populate on scale down
 func (fake *HTTPServiceFake) MarkIPAsPendingRelease(numberToMark int) (map[string]cns.IPConfigurationStatus, error) {
 	return fake.IPStateManager.MarkIPAsPendingRelease(numberToMark)
@@ -276,3 +285,5 @@ func (fake *HTTPServiceFake) Init(*common.ServiceConfig) error {
 }
 
 func (fake *HTTPServiceFake) Stop() {}
+
+func (fake *HTTPServiceFake) AttachIPConfigsHandlerMiddleware(cns.IPConfigsHandlerMiddleware) {}

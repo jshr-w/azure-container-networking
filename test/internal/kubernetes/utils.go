@@ -9,7 +9,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/Azure/azure-container-networking/test/internal/retry"
@@ -27,6 +26,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/tools/remotecommand"
 	"k8s.io/client-go/util/homedir"
+	k8sRetry "k8s.io/client-go/util/retry"
 )
 
 const (
@@ -34,10 +34,15 @@ const (
 	SubnetNameLabel        = "kubernetes.azure.com/podnetwork-subnet"
 
 	// RetryAttempts is the number of times to retry a test.
-	RetryAttempts       = 90
-	RetryDelay          = 10 * time.Second
-	DeleteRetryAttempts = 12
-	DeleteRetryDelay    = 5 * time.Second
+	RetryAttempts           = 90
+	RetryDelay              = 10 * time.Second
+	DeleteRetryAttempts     = 12
+	DeleteRetryDelay        = 5 * time.Second
+	ShortRetryAttempts      = 8
+	ShortRetryDelay         = 250 * time.Millisecond
+	PrivilegedDaemonSetPath = "../manifests/load/privileged-daemonset-windows.yaml"
+	PrivilegedLabelSelector = "app=privileged-daemonset"
+	PrivilegedNamespace     = "kube-system"
 )
 
 var Kubeconfig = flag.String("test-kubeconfig", filepath.Join(homedir.HomeDir(), ".kube", "config"), "(optional) absolute path to the kubeconfig file")
@@ -155,18 +160,6 @@ func MustSetupConfigMap(ctx context.Context, clientset *kubernetes.Clientset, co
 
 func Int32ToPtr(i int32) *int32 { return &i }
 
-func ParseImageString(s string) (url, image, version string) {
-	s1 := strings.Split(s, ":")
-	s2 := s1[0]
-	index := strings.LastIndex(s2, "/") // Returns byte location
-
-	return s2[:index], s2[index:], s1[1]
-}
-
-func GetImageString(url, image, version string) string {
-	return url + image + ":" + version
-}
-
 func WaitForPodsRunning(ctx context.Context, clientset *kubernetes.Clientset, namespace, labelselector string) error {
 	podsClient := clientset.CoreV1().Pods(namespace)
 
@@ -271,10 +264,14 @@ func WaitForPodDaemonset(ctx context.Context, clientset *kubernetes.Clientset, n
 		if err != nil {
 			return errors.Wrapf(err, "could not get daemonset %s", daemonsetName)
 		}
+		if daemonset.Status.UpdatedNumberScheduled != daemonset.Status.DesiredNumberScheduled {
+			log.Printf("daemonset %s is updating, %v of %v pods updated", daemonsetName, daemonset.Status.UpdatedNumberScheduled, daemonset.Status.DesiredNumberScheduled)
+			return errors.New("daemonset failed to update all pods")
+		}
 
 		if daemonset.Status.NumberReady == 0 && daemonset.Status.DesiredNumberScheduled == 0 {
 			// Capture daemonset restart. Restart sets every numerical status to 0.
-			log.Printf("daemonset %s is in restart phase, no pods should be ready or scheduled", daemonsetName)
+			log.Printf("daemonset %s is fresh, no pods should be ready or scheduled", daemonsetName)
 			return errors.New("daemonset did not set any pods to be scheduled")
 		}
 
@@ -289,7 +286,8 @@ func WaitForPodDaemonset(ctx context.Context, clientset *kubernetes.Clientset, n
 			return errors.Wrapf(err, "could not list pods with label selector %s", podLabelSelector)
 		}
 
-		log.Printf("daemonset %s has %d pods in ready status, expected %d", daemonsetName, len(podList.Items), daemonset.Status.CurrentNumberScheduled)
+		log.Printf("daemonset %s has %d pods in ready status | %d pods up-to-date status, expected %d",
+			daemonsetName, len(podList.Items), daemonset.Status.UpdatedNumberScheduled, daemonset.Status.CurrentNumberScheduled)
 		if len(podList.Items) != int(daemonset.Status.NumberReady) {
 			return errors.New("some pods of the daemonset are still not ready")
 		}
@@ -301,14 +299,27 @@ func WaitForPodDaemonset(ctx context.Context, clientset *kubernetes.Clientset, n
 }
 
 func MustUpdateReplica(ctx context.Context, deploymentsClient typedappsv1.DeploymentInterface, deploymentName string, replicas int32) {
-	deployment, err := deploymentsClient.Get(ctx, deploymentName, metav1.GetOptions{})
-	if err != nil {
-		panic(errors.Wrapf(err, "could not get deployment %s", deploymentName))
-	}
+	retryErr := k8sRetry.RetryOnConflict(k8sRetry.DefaultRetry, func() error {
+		// Get the latest Deployment resource.
+		deployment, getErr := deploymentsClient.Get(ctx, deploymentName, metav1.GetOptions{})
+		if getErr != nil {
+			return fmt.Errorf("failed to get deployment: %w", getErr)
+		}
 
-	deployment.Spec.Replicas = Int32ToPtr(replicas)
-	if _, err := deploymentsClient.Update(ctx, deployment, metav1.UpdateOptions{}); err != nil {
-		panic(errors.Wrapf(err, "could not update deployment %s", deploymentName))
+		// Modify the number of replicas.
+		deployment.Spec.Replicas = Int32ToPtr(replicas)
+
+		// Attempt to update the Deployment.
+		_, updateErr := deploymentsClient.Update(ctx, deployment, metav1.UpdateOptions{})
+		if updateErr != nil {
+			return fmt.Errorf("failed to update deployment: %w", updateErr)
+		}
+
+		return nil // No error, operation succeeded.
+	})
+
+	if retryErr != nil {
+		panic(errors.Wrapf(retryErr, "could not update deployment %s", deploymentName))
 	}
 }
 
@@ -397,6 +408,9 @@ func ExecCmdOnPod(ctx context.Context, clientset *kubernetes.Clientset, namespac
 	if err != nil {
 		return []byte{}, errors.Wrapf(err, "error in executing command %s", cmd)
 	}
+	if len(stdout.Bytes()) == 0 {
+		log.Printf("Warning: %v had 0 bytes returned from command - %v", podName, cmd)
+	}
 
 	return stdout.Bytes(), nil
 }
@@ -409,6 +423,18 @@ func NamespaceExists(ctx context.Context, clientset *kubernetes.Clientset, names
 		}
 		return false, errors.Wrapf(err, "error in getting namespace %s", namespace)
 	}
+	return true, nil
+}
+
+func DeploymentExists(ctx context.Context, deploymentsClient typedappsv1.DeploymentInterface, deploymentName string) (bool, error) {
+	_, err := deploymentsClient.Get(ctx, deploymentName, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, errors.Wrapf(err, "error in getting deployment %s", deploymentName)
+	}
+
 	return true, nil
 }
 
@@ -442,8 +468,69 @@ func MustRestartDaemonset(ctx context.Context, clientset *kubernetes.Clientset, 
 		ds.Spec.Template.ObjectMeta.Annotations = make(map[string]string)
 	}
 
+	// gen represents the generation before triggering a restart
+	gen := ds.Status.ObservedGeneration
+	log.Printf("Current generation is %v", gen)
 	ds.Spec.Template.ObjectMeta.Annotations["kubectl.kubernetes.io/restartedAt"] = time.Now().Format(time.RFC3339)
 
 	_, err = clientset.AppsV1().DaemonSets(namespace).Update(ctx, ds, metav1.UpdateOptions{})
-	return errors.Wrapf(err, "failed to update ds %s", daemonsetName)
+	if err != nil {
+		return errors.Wrapf(err, "failed to update ds %s", daemonsetName)
+	}
+	checkDaemonsetGenerationFn := func() error {
+		ds, err := clientset.AppsV1().DaemonSets(namespace).Get(ctx, daemonsetName, metav1.GetOptions{})
+		if err != nil {
+			return errors.Wrapf(err, "could not get daemonset %s", daemonsetName)
+		}
+
+		if ds.Status.ObservedGeneration < gen {
+			// Generation update should not reset or lower the ObservedGeneration. Only happens if a complete restart or teardown of the daemonset occurs.
+			log.Printf("Warning: daemonset %s current generation (%d) is less than starting generation (%d)", daemonsetName, gen, ds.Status.ObservedGeneration)
+			return errors.New("daemonset generation was less than original")
+		}
+
+		if ds.Status.ObservedGeneration == gen {
+			// Check for generation update.
+			log.Printf("daemonset %s has not updated generation", daemonsetName)
+			return errors.New("daemonset generation did not change")
+		}
+
+		log.Printf("daemonset %s has updated generation", daemonsetName)
+		return nil
+	}
+	retrier := retry.Retrier{Attempts: ShortRetryAttempts, Delay: ShortRetryDelay}
+	return errors.Wrapf(retrier.Do(ctx, checkDaemonsetGenerationFn), "could not wait for ds %s generation update", daemonsetName)
+}
+
+// Restarts kubeproxy on windows nodes from an existing privileged daemonset
+func RestartKubeProxyService(ctx context.Context, clientset *kubernetes.Clientset, privilegedNamespace, privilegedLabelSelector string, config *rest.Config) error {
+	restartKubeProxyCmd := []string{"powershell", "Restart-service", "kubeproxy"}
+
+	nodes, err := GetNodeList(ctx, clientset)
+	if err != nil {
+		return errors.Wrapf(err, "failed to get node list")
+	}
+
+	for index := range nodes.Items {
+		node := nodes.Items[index]
+		if node.Status.NodeInfo.OperatingSystem != string(corev1.Windows) {
+			continue
+		}
+		// get the privileged pod
+		pod, err := GetPodsByNode(ctx, clientset, privilegedNamespace, privilegedLabelSelector, node.Name)
+		if err != nil {
+			return errors.Wrapf(err, "failed to get privileged pod on node %s", node.Name)
+		}
+
+		if len(pod.Items) == 0 {
+			return errors.Errorf("there are no privileged pods on node - %v", node.Name)
+		}
+		privilegedPod := pod.Items[0]
+		// exec into the pod and restart kubeproxy
+		_, err = ExecCmdOnPod(ctx, clientset, privilegedNamespace, privilegedPod.Name, restartKubeProxyCmd, config)
+		if err != nil {
+			return errors.Wrapf(err, "failed to exec into privileged pod %s on node %s", privilegedPod.Name, node.Name)
+		}
+	}
+	return nil
 }

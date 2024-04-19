@@ -18,6 +18,7 @@ import (
 // +kubebuilder:printcolumn:name="Address Prefixes",type=string,priority=1,JSONPath=`.status.addressPrefixes`
 // +kubebuilder:printcolumn:name="Network",type=string,priority=1,JSONPath=`.spec.vnetGUID`
 // +kubebuilder:printcolumn:name="Subnet",type=string,priority=1,JSONPath=`.spec.subnetResourceID`
+// +kubebuilder:printcolumn:name="SubnetGUID",type=string,priority=1,JSONPath=`.spec.subnetGUID`
 type PodNetwork struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -42,16 +43,19 @@ type PodNetworkSpec struct {
 	VnetGUID string `json:"vnetGUID,omitempty"`
 	// customer subnet id
 	SubnetResourceID string `json:"subnetResourceID,omitempty"`
+	// customer subnet guid
+	SubnetGUID string `json:"subnetGUID,omitempty"`
 }
 
 // Status indicates the status of PN
-// +kubebuilder:validation:Enum=Ready;InUse;SubnetNotDelegated
+// +kubebuilder:validation:Enum=Ready;InUse;SubnetNotDelegated;SubnetDelegatedToDifferentService
 type Status string
 
 const (
-	Ready              Status = "Ready"
-	InUse              Status = "InUse"
-	SubnetNotDelegated Status = "SubnetNotDelegated"
+	Ready                             Status = "Ready"
+	InUse                             Status = "InUse"
+	SubnetNotDelegated                Status = "SubnetNotDelegated"
+	SubnetDelegatedToDifferentService Status = "SubnetDelegatedToDifferentService"
 )
 
 // PodNetworkStatus defines the observed state of PodNetwork
